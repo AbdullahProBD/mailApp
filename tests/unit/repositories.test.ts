@@ -288,7 +288,7 @@ describe("mfa method repository", () => {
     const owner = await requireOwnerProfile(database.db);
 
     const created = await upsertMfaMethod(
-      { ownerId: owner.id, type: "totp", secretEncrypted: "aesgcm.v1.iv.body" },
+      { ownerId: owner.id, type: "totp", secretEncrypted: "first-ciphertext" },
       database.db,
     );
     expect(created.verifiedAt).toBeNull();
@@ -305,10 +305,10 @@ describe("mfa method repository", () => {
   it("replaces a secret and resets verification", async () => {
     const owner = await requireOwnerProfile(database.db);
     const updated = await upsertMfaMethod(
-      { ownerId: owner.id, type: "totp", secretEncrypted: "aesgcm.v2.iv.body2" },
+      { ownerId: owner.id, type: "totp", secretEncrypted: "second-ciphertext" },
       database.db,
     );
-    expect(updated.secretEncrypted).toBe("aesgcm.v2.iv.body2");
+    expect(updated.secretEncrypted).toBe("second-ciphertext");
     expect(updated.verifiedAt).toBeNull();
     expect(updated.preferred).toBe(false);
   });
