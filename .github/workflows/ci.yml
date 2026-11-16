@@ -42,6 +42,13 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      - name: Reject string-built SQL
+        run: |
+          if grep -RInE 'sql\.raw[[:space:]]*\(|(execute|query|unsafe)\([^)]*\+' src scripts --include='*.ts'; then
+            echo "::error::Raw SQL concatenation is not allowed; use parameterized Drizzle queries."
+            exit 1
+          fi
+
       - name: Typecheck
         run: pnpm typecheck
 
@@ -66,6 +73,77 @@ jobs:
 
       - name: Dependency audit
         run: pnpm audit --audit-level high
+
+  migration:
+    name: Migrations against Postgres
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: mailapp
+          POSTGRES_PASSWORD: mailapp
+          POSTGRES_DB: mailapp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mailapp -d mailapp"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.21.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply migrations twice
+        run: |
+          pnpm db:migrate
+          pnpm db:migrate
+        env:
+          DATABASE_URL: postgresql://mailapp:mailapp@127.0.0.1:5432/mailapp
+
+      - name: Verify deny-all RLS and audit immutability
+        run: pnpm db:verify
+        env:
+          DATABASE_URL: postgresql://mailapp:mailapp@127.0.0.1:5432/mailapp
+
+      - name: Seed refuses production
+        run: |
+          set +e
+          pnpm db:seed
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "::error::Seed must refuse to run in production"
+            exit 1
+          fi
+        env:
+          NODE_ENV: production
+          DATABASE_URL: postgresql://mailapp:mailapp@127.0.0.1:5432/mailapp
+          OWNER_EMAIL: ci@example.invalid
+          SETUP_TOKEN: ci-only-not-a-production-secret-00000000
+          SUPABASE_URL: https://ci.supabase.invalid
+          SUPABASE_SERVICE_ROLE_KEY: ci-only-not-a-production-secret-00000000
+          ENCRYPTION_KEYS: v1:MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+          SESSION_PEPPER: ci-only-not-a-production-secret-00000000
+          CRON_SECRET: ci-only-not-a-production-secret-00000000
+          UPSTASH_REDIS_REST_URL: https://ci.upstash.invalid
+          UPSTASH_REDIS_REST_TOKEN: ci-only-not-a-production-secret
+          APP_URL: https://ci.example.invalid
 
   e2e:
     name: End-to-end smoke tests
