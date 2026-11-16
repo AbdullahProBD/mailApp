@@ -1,0 +1,4 @@
+/* Global design tokens are introduced in the design-system phase. */
+:root {
+  color-scheme: light dark;
+}
