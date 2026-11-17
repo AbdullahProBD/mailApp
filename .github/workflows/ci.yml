@@ -219,7 +219,3 @@ jobs:
 
       - name: Analyze
         uses: github/codeql-action/analyze@v4
-        with:
-          # This repository is private without GitHub Code Security. Still run
-          # CodeQL analysis in CI, but do not upload SARIF to an unavailable API.
-          upload: never
