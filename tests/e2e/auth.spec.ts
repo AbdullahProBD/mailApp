@@ -108,7 +108,7 @@ test("owner setup, session controls, recovery and sign-in", async ({ page }) => 
 
   // Settings lists the live session and the verified second factor.
   await page.getByRole("link", { name: "Security" }).click();
-  await expect(page.getByRole("heading", { name: "Security" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Security", exact: true })).toBeVisible();
   await expect(page.getByText("This device")).toBeVisible();
   await expect(page.getByRole("radio", { name: /Authenticator app/ })).toBeChecked();
 
@@ -129,7 +129,7 @@ test("owner setup, session controls, recovery and sign-in", async ({ page }) => 
 
   // Bulk revocation ends this session too, and the cookie cannot be reused.
   await page.getByRole("link", { name: "Security" }).click();
-  await expect(page.getByRole("heading", { name: "Security" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Security", exact: true })).toBeVisible();
   page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("button", { name: "Sign out everywhere" }).click();
   await completeStepUp(page, SETUP_PASSWORD);
