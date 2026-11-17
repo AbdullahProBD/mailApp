@@ -15,7 +15,14 @@ const RECOVERED_PASSWORD = "Vb6$nR2sWq9!Zt4mK8";
 let totpSecret = "";
 let recoveryCodes: string[] = [];
 
-function currentTotp(): string {
+/** TOTP codes are accepted once per 30-second step, so each use needs a fresh step. */
+let lastTotpStep = -1;
+
+function currentTotpStep(): number {
+  return Math.floor(Date.now() / 30_000);
+}
+
+function generateTotp(): string {
   return new TOTP({
     issuer: "Mail",
     label: OWNER_EMAIL,
@@ -26,14 +33,13 @@ function currentTotp(): string {
   }).generate();
 }
 
-/**
- * TOTP replay protection keeps a per-method watermark, so a second
- * authentication inside the same 30-second step is correctly refused. Wait for
- * the next step before submitting a fresh code.
- */
-async function waitForFreshTotpStep(): Promise<void> {
-  const remaining = 30_000 - (Date.now() % 30_000);
-  await new Promise((resolve) => setTimeout(resolve, remaining + 1_000));
+async function freshTotp(): Promise<string> {
+  if (currentTotpStep() <= lastTotpStep) {
+    const remaining = 30_000 - (Date.now() % 30_000);
+    await new Promise((resolve) => setTimeout(resolve, remaining + 500));
+  }
+  lastTotpStep = currentTotpStep();
+  return generateTotp();
 }
 
 async function signIn(page: Page, password: string): Promise<void> {
@@ -43,13 +49,21 @@ async function signIn(page: Page, password: string): Promise<void> {
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: /Verify/ })).toBeVisible();
 
-  await waitForFreshTotpStep();
-  await page.getByLabel("Authenticator code").fill(currentTotp());
+  await page.locator("#login-code").fill(await freshTotp());
   await page.getByRole("button", { name: "Sign in securely" }).click();
 
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Your inbox" })).toBeVisible();
   await expect(page.getByText(`Welcome, ${OWNER_EMAIL}`)).toBeVisible();
+}
+
+/** Completes the password + second-factor step-up the settings page requires. */
+async function completeStepUp(page: Page, password: string): Promise<void> {
+  await page.getByLabel("Current password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Confirm security code" })).toBeVisible();
+  await page.locator("#settings-step-up-code").fill(await freshTotp());
+  await page.getByRole("button", { name: "Confirm security code" }).click();
 }
 
 test("owner setup, session controls, recovery and sign-in", async ({ page }) => {
@@ -73,7 +87,7 @@ test("owner setup, session controls, recovery and sign-in", async ({ page }) => 
   expect(manualKey).toMatch(/^[A-Z2-7]{16,}$/);
   totpSecret = manualKey;
 
-  await page.getByLabel("6-digit authenticator code").fill(currentTotp());
+  await page.locator("#setup-totp-code").fill(await freshTotp());
   await page.getByRole("button", { name: "Verify authenticator" }).click();
 
   // Step 4: single-use recovery codes are shown once.
@@ -99,8 +113,9 @@ test("owner setup, session controls, recovery and sign-in", async ({ page }) => 
   await expect(page.getByRole("radio", { name: /Authenticator app/ })).toBeChecked();
 
   // Regeneration replaces the whole set and shows the new codes once.
-  await page.getByLabel("Current password").fill(SETUP_PASSWORD);
+  // This is a sensitive action, so it requires a fresh password + 2FA step-up.
   await page.getByRole("button", { name: "Regenerate recovery codes" }).click();
+  await completeStepUp(page, SETUP_PASSWORD);
   const regenerated = page.getByRole("list", { name: "New recovery codes" });
   await expect(regenerated.getByRole("listitem")).toHaveCount(10);
   recoveryCodes = await regenerated.getByRole("listitem").allInnerTexts();
@@ -117,6 +132,7 @@ test("owner setup, session controls, recovery and sign-in", async ({ page }) => 
   await expect(page.getByRole("heading", { name: "Security" })).toBeVisible();
   page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("button", { name: "Sign out everywhere" }).click();
+  await completeStepUp(page, SETUP_PASSWORD);
   await expect(page).toHaveURL(/\/login$/);
 
   await page.goto("/");
