@@ -6,13 +6,18 @@ import { z } from "zod";
 import { assertSameOrigin } from "@/lib/security/request-context";
 import { SENDER_PROVIDER_KINDS } from "@/server/repositories/mail-sender-providers.repository";
 import {
+  beginOwnerStepUp,
   beginOwnerTotpEnrollment,
+  changeOwnerPassword,
+  completeOwnerStepUp,
   configureOwnerEmailOtp,
+  removeOwnerMfaMethod,
   regenerateOwnerRecoveryCodes,
   revokeAllOwnerSessions,
   revokeOtherOwnerSessions,
   revokeOwnerSession,
   setOwnerPreferredMfaMethod,
+  setOwnerNonCriticalSecurityEmailPreference,
   verifyOwnerEmailOtpEnrollment,
   verifyOwnerTotpEnrollment,
 } from "@/server/services/auth.service";
@@ -26,6 +31,27 @@ async function validateMutation() {
     return false;
   }
   return true;
+}
+
+export async function beginStepUpAction(input: unknown) {
+  if (!(await validateMutation())) return { ok: false as const };
+  const parsed = z.object({ password: z.string().min(1).max(200) }).safeParse(input);
+  if (!parsed.success) return { ok: false as const };
+  const challenge = await beginOwnerStepUp(parsed.data.password);
+  return challenge ? { ok: true as const, ...challenge } : { ok: false as const };
+}
+
+export async function completeStepUpAction(input: unknown) {
+  if (!(await validateMutation())) return { ok: false as const };
+  const parsed = z
+    .object({
+      challengeId: z.uuid(),
+      challengeToken: z.string().min(40).max(128),
+      code: z.string().min(1).max(20),
+    })
+    .safeParse(input);
+  if (!parsed.success) return { ok: false as const };
+  return { ok: await completeOwnerStepUp(parsed.data) };
 }
 
 export async function revokeSessionAction(input: unknown) {
@@ -51,6 +77,13 @@ export async function revokeAllSessionsAction() {
   return { ok: true as const };
 }
 
+export async function removeMfaMethodAction(input: unknown) {
+  if (!(await validateMutation())) return { ok: false as const };
+  const parsed = z.object({ type: z.enum(["totp", "email_otp"]) }).safeParse(input);
+  if (!parsed.success) return { ok: false as const };
+  return { ok: await removeOwnerMfaMethod(parsed.data.type) };
+}
+
 export async function preferredMfaMethodAction(input: unknown) {
   if (!(await validateMutation())) return { ok: false as const };
   const parsed = z.object({ type: z.enum(["totp", "email_otp"]) }).safeParse(input);
@@ -59,11 +92,9 @@ export async function preferredMfaMethodAction(input: unknown) {
 }
 
 /** Regenerating invalidates every previously issued recovery code. */
-export async function regenerateRecoveryCodesAction(input: unknown) {
+export async function regenerateRecoveryCodesAction() {
   if (!(await validateMutation())) return { ok: false as const };
-  const parsed = z.object({ password: z.string().min(1).max(200) }).safeParse(input);
-  if (!parsed.success) return { ok: false as const };
-  const codes = await regenerateOwnerRecoveryCodes(parsed.data.password);
+  const codes = await regenerateOwnerRecoveryCodes();
   return codes ? { ok: true as const, codes } : { ok: false as const };
 }
 
@@ -100,6 +131,25 @@ export async function beginEmailEnrollmentAction(input: unknown) {
     ...(parsed.data.fromName ? { fromName: parsed.data.fromName } : {}),
   });
   return challenge ? { ok: true as const, ...challenge } : { ok: false as const };
+}
+
+export async function changePasswordAction(input: unknown) {
+  if (!(await validateMutation())) return { ok: false as const, error: "invalid" as const };
+  const parsed = z
+    .object({
+      currentPassword: z.string().min(1).max(200),
+      newPassword: z.string().min(12).max(200),
+    })
+    .safeParse(input);
+  if (!parsed.success) return { ok: false as const, error: "invalid" as const };
+  return changeOwnerPassword(parsed.data.currentPassword, parsed.data.newPassword);
+}
+
+export async function setNonCriticalSecurityEmailsAction(input: unknown) {
+  if (!(await validateMutation())) return { ok: false as const };
+  const parsed = z.boolean().safeParse(input);
+  if (!parsed.success) return { ok: false as const };
+  return { ok: await setOwnerNonCriticalSecurityEmailPreference(parsed.data) };
 }
 
 export async function verifyEmailEnrollmentAction(input: unknown) {

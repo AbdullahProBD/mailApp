@@ -11,6 +11,7 @@ import {
   type SenderProvider,
 } from "@/server/repositories/mail-sender-providers.repository";
 import type { SenderProviderKind } from "@/server/repositories/mail-sender-providers.repository";
+import { describeDevice } from "@/lib/auth/device";
 
 const credentialsSchema = z.record(z.string(), z.unknown());
 
@@ -37,23 +38,35 @@ function friendlyFrom(provider: SenderProvider): string {
     : provider.fromAddress;
 }
 
-function buildMessage(input: { code: string; ownerEmail: string; now: Date; appUrl: string }) {
+function buildMessage(input: {
+  code: string;
+  ownerEmail: string;
+  now: Date;
+  appUrl: string;
+  country?: string | null | undefined;
+  userAgent?: string | null | undefined;
+}) {
   const time = new Intl.DateTimeFormat("en", {
     dateStyle: "full",
     timeStyle: "long",
     timeZone: "UTC",
   }).format(input.now);
   const loginUrl = new URL("/login", input.appUrl).toString();
+  const device = describeDevice(input.userAgent ?? null);
+  const location =
+    input.country && /^[A-Z]{2}$/.test(input.country) ? input.country : "Unknown location";
   return {
     subject: "Your Mail sign-in code",
     text: [
       `Your Mail sign-in code is ${input.code}.`,
       "",
       `Requested for ${input.ownerEmail} at ${time}.`,
+      `Approximate location: ${location}.`,
+      `Device: ${device.browser} on ${device.platform}.`,
       "This code expires in 10 minutes and can be used only once.",
       "",
       `Sign in: ${loginUrl}`,
-      "If this wasn't you, do not share the code and secure your account immediately.",
+      "If this wasn't you, do not share the code. Secure your account and contact the owner immediately.",
     ].join("\n"),
   };
 }
@@ -165,6 +178,8 @@ export async function sendOwnerOtp(input: {
   code: string;
   now?: Date;
   providerId?: string;
+  country?: string | null | undefined;
+  userAgent?: string | null | undefined;
 }): Promise<{ ok: true } | { ok: false; error: "unconfigured" | "delivery" }> {
   const env = getServerEnv();
   const code = z
@@ -187,6 +202,8 @@ export async function sendOwnerOtp(input: {
       ownerEmail: env.OWNER_EMAIL,
       now: input.now ?? new Date(),
       appUrl: env.APP_URL,
+      country: input.country,
+      userAgent: input.userAgent,
     });
     await sendThroughProvider(provider, credentials, message, env.OWNER_EMAIL);
     return { ok: true };
@@ -196,6 +213,54 @@ export async function sendOwnerOtp(input: {
 }
 
 /** Sends a validation email to the owner using a proposed, not-yet-persisted sender configuration. */
+/** Sends a plain-text security alert using the configured default provider. */
+export async function sendOwnerSecurityNotice(input: {
+  ownerId: string;
+  subject: string;
+  details: string;
+  critical: boolean;
+  now?: Date;
+  providerId?: string;
+}): Promise<boolean> {
+  const parsed = z
+    .object({
+      subject: z.string().min(1).max(120),
+      details: z.string().min(1).max(2_000),
+    })
+    .safeParse(input);
+  if (!parsed.success) return false;
+  const env = getServerEnv();
+  try {
+    const providers = await listSenderProviders();
+    const provider = input.providerId
+      ? providers.find((entry) => entry.id === input.providerId)
+      : providers.find((entry) => entry.isDefault);
+    if (!provider) return false;
+    const credentials = await getSenderProviderCredentials(provider.id);
+    const time = new Intl.DateTimeFormat("en", {
+      dateStyle: "full",
+      timeStyle: "long",
+      timeZone: "UTC",
+    }).format(input.now ?? new Date());
+    const message = {
+      subject: parsed.data.subject,
+      text: [
+        `A security event occurred for ${env.OWNER_EMAIL}.`,
+        `Time: ${time}.`,
+        "",
+        parsed.data.details,
+        "",
+        "If this wasn't you, secure your account immediately and review active sessions.",
+        new URL("/settings", env.APP_URL).toString(),
+      ].join("\\n"),
+    };
+    await sendThroughProvider(provider, credentials, message, env.OWNER_EMAIL);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function testOwnerOtpProvider(input: {
   kind: SenderProviderKind;
   fromAddress: string;
@@ -203,6 +268,8 @@ export async function testOwnerOtpProvider(input: {
   credentials: Record<string, unknown>;
   code: string;
   now?: Date;
+  country?: string | null | undefined;
+  userAgent?: string | null | undefined;
 }): Promise<{ ok: true } | { ok: false; error: "delivery" }> {
   const env = getServerEnv();
   const parsed = z
@@ -231,6 +298,8 @@ export async function testOwnerOtpProvider(input: {
       ownerEmail: env.OWNER_EMAIL,
       now: input.now ?? new Date(),
       appUrl: env.APP_URL,
+      country: input.country,
+      userAgent: input.userAgent,
     });
     await sendThroughProvider(temporaryProvider, parsed.data.credentials, message, env.OWNER_EMAIL);
     return { ok: true };

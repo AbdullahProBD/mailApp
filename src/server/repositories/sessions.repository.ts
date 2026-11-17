@@ -21,6 +21,7 @@ export interface SessionRecord {
   userAgent: string | null;
   country: string | null;
   mfaVerifiedAt: Date | null;
+  stepUpVerifiedAt: Date | null;
   rememberDevice: boolean;
   tokenRotatedAt: Date | null;
   revokedAt: Date | null;
@@ -51,6 +52,7 @@ function toSessionRecord(row: typeof sessions.$inferSelect): SessionRecord {
     userAgent: row.userAgent ?? null,
     country: row.country ?? null,
     mfaVerifiedAt: row.mfaVerifiedAt ?? null,
+    stepUpVerifiedAt: row.stepUpVerifiedAt ?? null,
     rememberDevice: row.rememberDevice,
     tokenRotatedAt: row.tokenRotatedAt ?? null,
     revokedAt: row.revokedAt ?? null,
@@ -214,6 +216,27 @@ export async function markSessionMfaVerified(
     .update(sessions)
     .set({ mfaVerifiedAt: now })
     .where(and(eq(sessions.id, sessionId), isNull(sessions.revokedAt)));
+}
+
+/** Marks a live session as freshly verified for sensitive actions. */
+export async function markSessionStepUpVerified(
+  sessionId: string,
+  now: Date = new Date(),
+  db: DbExecutor = getDb(),
+): Promise<boolean> {
+  const rows = await db
+    .update(sessions)
+    .set({ stepUpVerifiedAt: now })
+    .where(
+      and(
+        eq(sessions.id, sessionId),
+        isNull(sessions.revokedAt),
+        gt(sessions.idleExpiresAt, now),
+        gt(sessions.absoluteExpiresAt, now),
+      ),
+    )
+    .returning({ id: sessions.id });
+  return rows.length === 1;
 }
 
 /** Deletes rows that can no longer authenticate anyone. */

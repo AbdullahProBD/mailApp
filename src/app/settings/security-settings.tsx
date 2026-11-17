@@ -5,20 +5,26 @@ import { useState, useTransition, type SubmitEvent } from "react";
 
 import {
   beginEmailEnrollmentAction,
+  beginStepUpAction,
   beginTotpEnrollmentAction,
+  changePasswordAction,
+  completeStepUpAction,
   preferredMfaMethodAction,
   regenerateRecoveryCodesAction,
+  removeMfaMethodAction,
   revokeAllSessionsAction,
   revokeOtherSessionsAction,
   revokeSessionAction,
   verifyEmailEnrollmentAction,
   verifyTotpEnrollmentAction,
+  setNonCriticalSecurityEmailsAction,
 } from "./actions";
 import {
   SenderProviderFields,
   senderCredentials,
   type SenderProviderKind,
 } from "@/app/_components/sender-provider-fields";
+import { CodeInput } from "@/app/_components/code-input";
 
 type SessionItem = {
   id: string;
@@ -31,6 +37,7 @@ type SessionItem = {
 type MfaType = "totp" | "email_otp";
 type MfaMethod = { type: MfaType; label: string; preferred: boolean };
 type EmailEnrollmentChallenge = { challengeId: string; challengeToken: string };
+type StepUpChallenge = EmailEnrollmentChallenge & { mfaType: MfaType };
 
 const MFA_LABELS: Record<MfaType, string> = {
   totp: "Authenticator app",
@@ -48,10 +55,12 @@ export function SecuritySettings({
   sessions,
   methods,
   missing,
+  nonCriticalSecurityEmails: initialNonCriticalSecurityEmails,
 }: {
   sessions: SessionItem[];
   methods: MfaMethod[];
   missing: MfaType[];
+  nonCriticalSecurityEmails: boolean;
 }) {
   const router = useRouter();
   const [items, setItems] = useState(sessions);
@@ -60,7 +69,16 @@ export function SecuritySettings({
   );
   const [message, setMessage] = useState("");
   const [codes, setCodes] = useState<string[] | null>(null);
-  const [password, setPassword] = useState("");
+  const [stepUpPassword, setStepUpPassword] = useState("");
+  const [stepUpCode, setStepUpCode] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [nonCriticalSecurityEmails, setNonCriticalSecurityEmails] = useState(
+    initialNonCriticalSecurityEmails,
+  );
+  const [securityEmailsBusy, setSecurityEmailsBusy] = useState(false);
+  const [stepUpChallenge, setStepUpChallenge] = useState<StepUpChallenge | null>(null);
+  const [stepUpBusyAction, setStepUpBusyAction] = useState<string | null>(null);
   const [enrolling, setEnrolling] = useState<MfaType | null>(null);
   const [totpSetup, setTotpSetup] = useState<{ qrDataUrl: string; manualKey: string } | null>(null);
   const [totpCode, setTotpCode] = useState("");
@@ -69,6 +87,68 @@ export function SecuritySettings({
   const [providerKind, setProviderKind] = useState<SenderProviderKind>("resend");
   const [enrollError, setEnrollError] = useState("");
   const [pending, startTransition] = useTransition();
+
+  function requireStepUp(action: string) {
+    setMessage("");
+    setStepUpBusyAction(action);
+    setStepUpPassword("");
+    setStepUpCode("");
+    setStepUpChallenge(null);
+  }
+
+  function startStepUp(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const action = stepUpBusyAction;
+    if (!action) return;
+    setMessage("");
+    startTransition(async () => {
+      if (!stepUpChallenge) {
+        const result = await beginStepUpAction({ password: stepUpPassword });
+        if (!result.ok) {
+          setMessage("Could not verify your password or send the security code. Try again.");
+          return;
+        }
+        if (action !== "password") setStepUpPassword("");
+        setStepUpChallenge({
+          challengeId: result.challengeId,
+          challengeToken: result.challengeToken,
+          mfaType: result.mfaType,
+        });
+        setStepUpCode("");
+        return;
+      }
+      const result = await completeStepUpAction({
+        ...stepUpChallenge,
+        code: stepUpCode,
+      });
+      if (!result.ok) {
+        setMessage("That code could not be verified. Check it and try again.");
+        return;
+      }
+      if (action === "password") {
+        setStepUpBusyAction("password-new");
+        return;
+      }
+      setStepUpChallenge(null);
+      setStepUpCode("");
+      setStepUpBusyAction(null);
+      if (action === "enroll:totp" || action === "enroll:email_otp") {
+        openEnrollment(action.slice("enroll:".length) as MfaType);
+      } else if (action === "recovery") {
+        regenerateCodes();
+      } else if (action === "preferred:totp" || action === "preferred:email_otp") {
+        chooseMethod(action.slice("preferred:".length) as MfaType);
+      } else if (action === "remove:totp" || action === "remove:email_otp") {
+        removeMethod(action.slice("remove:".length) as MfaType);
+      } else if (action === "revoke:others") {
+        revokeOthers();
+      } else if (action === "revoke:all") {
+        revokeAll();
+      } else if (action.startsWith("revoke:")) {
+        revoke(action.slice("revoke:".length));
+      }
+    });
+  }
 
   function openEnrollment(type: MfaType) {
     setEnrollError("");
@@ -156,6 +236,53 @@ export function SecuritySettings({
     });
   }
 
+  function changePassword(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (newPassword !== confirmPassword) {
+      setMessage("The new passwords do not match.");
+      return;
+    }
+    setMessage("");
+    startTransition(async () => {
+      const result = await changePasswordAction({
+        currentPassword: stepUpPassword,
+        newPassword,
+      });
+      if (!result.ok) {
+        setMessage(
+          result.error === "policy"
+            ? "The new password does not meet the password policy."
+            : result.error === "breached"
+              ? "That password is known to be compromised. Choose another one."
+              : result.error === "locked"
+                ? "Password changes are temporarily locked. Try again later."
+                : "The current password is incorrect or security verification is required.",
+        );
+        return;
+      }
+      setStepUpPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setStepUpBusyAction(null);
+      setMessage("Password changed successfully.");
+      router.refresh();
+    });
+  }
+
+  function toggleSecurityEmails(enabled: boolean) {
+    setNonCriticalSecurityEmails(enabled);
+    setSecurityEmailsBusy(true);
+    setMessage("");
+    startTransition(async () => {
+      const result = await setNonCriticalSecurityEmailsAction(enabled);
+      if (!result.ok) {
+        setNonCriticalSecurityEmails(!enabled);
+        setMessage("Could not update your security email preference.");
+      }
+      setSecurityEmailsBusy(false);
+    });
+  }
+
   function valueFrom(data: FormData, name: string): string {
     const value = data.get(name);
     return typeof value === "string" ? value : "";
@@ -227,14 +354,28 @@ export function SecuritySettings({
     setMessage("");
     setCodes(null);
     startTransition(async () => {
-      const result = await regenerateRecoveryCodesAction({ password });
+      const result = await regenerateRecoveryCodesAction();
       if (!result.ok) {
-        setMessage("Recovery codes were not regenerated. Check your password and try again.");
+        setMessage(
+          "Recovery codes were not regenerated. Complete security verification and try again.",
+        );
         return;
       }
       setCodes(result.codes);
-      setPassword("");
       setMessage("New recovery codes generated. The previous codes no longer work.");
+    });
+  }
+
+  function removeMethod(type: MfaType) {
+    setMessage("");
+    startTransition(async () => {
+      const result = await removeMfaMethodAction({ type });
+      if (!result.ok) {
+        setMessage("That method could not be removed. Your last verified method is protected.");
+        return;
+      }
+      setMessage(`${MFA_LABELS[type]} removed.`);
+      router.refresh();
     });
   }
 
@@ -266,16 +407,28 @@ export function SecuritySettings({
                 value={method.type}
                 checked={preferred === method.type}
                 onChange={() => {
-                  chooseMethod(method.type);
+                  requireStepUp(`preferred:${method.type}`);
                 }}
                 disabled={pending || method.preferred}
               />
-              <label htmlFor={`mfa-${method.type}`} className="cursor-pointer">
-                <span className="block text-sm font-medium">{method.label}</span>
-                <span className="mt-1 block text-xs text-stone-500">
-                  Verified · {method.preferred ? "Preferred" : "Available"}
-                </span>
-              </label>
+              <div>
+                <label htmlFor={`mfa-${method.type}`} className="cursor-pointer">
+                  <span className="block text-sm font-medium">{method.label}</span>
+                  <span className="mt-1 block text-xs text-stone-500">
+                    Verified · {method.preferred ? "Preferred" : "Available"}
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  className={`${dangerClass} mt-3`}
+                  disabled={pending || methods.length < 2}
+                  onClick={() => {
+                    requireStepUp(`remove:${method.type}`);
+                  }}
+                >
+                  Remove {method.label}
+                </button>
+              </div>
             </div>
           ))}
         </fieldset>
@@ -292,7 +445,7 @@ export function SecuritySettings({
                   type="button"
                   className={buttonClass}
                   onClick={() => {
-                    openEnrollment(type);
+                    requireStepUp(`enroll:${type}`);
                   }}
                   disabled={pending || enrolling !== null}
                 >
@@ -347,22 +500,14 @@ export function SecuritySettings({
                           {totpSetup.manualKey}
                         </code>
                         <form className="mt-4 space-y-4" onSubmit={verifyTotpEnrollment}>
-                          <label className="block text-sm font-medium">
-                            Six-digit authenticator code
-                            <input
-                              className={inputClass}
-                              type="text"
-                              inputMode="numeric"
-                              autoComplete="one-time-code"
-                              pattern="[0-9]{6}"
-                              maxLength={6}
-                              required
-                              value={totpCode}
-                              onChange={(event) => {
-                                setTotpCode(event.target.value);
-                              }}
-                            />
-                          </label>
+                          <CodeInput
+                            id="settings-totp-code"
+                            name="totpCode"
+                            label="Six-digit authenticator code"
+                            value={totpCode}
+                            onChange={setTotpCode}
+                            inputClassName="min-h-12 w-full rounded-xl border border-stone-300 bg-white text-center font-mono text-xl text-stone-950 shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-stone-700 dark:bg-stone-950 dark:text-white"
+                          />
                           <button className={buttonClass} type="submit" disabled={pending}>
                             {pending ? "Verifying…" : "Verify authenticator"}
                           </button>
@@ -391,22 +536,14 @@ export function SecuritySettings({
                       Enter the six-digit code just sent to the owner email address. It expires in
                       ten minutes.
                     </p>
-                    <label className="block text-sm font-medium">
-                      Email verification code
-                      <input
-                        className={inputClass}
-                        type="text"
-                        inputMode="numeric"
-                        autoComplete="one-time-code"
-                        pattern="[0-9]{6}"
-                        maxLength={6}
-                        required
-                        value={emailCode}
-                        onChange={(event) => {
-                          setEmailCode(event.target.value);
-                        }}
-                      />
-                    </label>
+                    <CodeInput
+                      id="settings-email-code"
+                      name="emailCode"
+                      label="Email verification code"
+                      value={emailCode}
+                      onChange={setEmailCode}
+                      inputClassName="min-h-12 w-full rounded-xl border border-stone-300 bg-white text-center font-mono text-xl text-stone-950 shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-stone-700 dark:bg-stone-950 dark:text-white"
+                    />
                     <button className={buttonClass} type="submit" disabled={pending}>
                       {pending ? "Verifying…" : "Verify email method"}
                     </button>
@@ -416,6 +553,156 @@ export function SecuritySettings({
             )}
           </div>
         )}
+      </section>
+
+      {stepUpBusyAction && (
+        <section
+          aria-labelledby="step-up-heading"
+          className="rounded-2xl border border-indigo-200 bg-indigo-50 p-6 dark:border-indigo-900 dark:bg-indigo-950"
+        >
+          <h2 id="step-up-heading" className="text-lg font-semibold">
+            Verify it’s you
+          </h2>
+          <p className="mt-2 text-sm text-stone-600 dark:text-stone-300">
+            Sensitive security changes require your current password and a fresh second-factor code.
+          </p>
+          {stepUpBusyAction === "password-new" ? (
+            <form className="mt-4 space-y-4" onSubmit={changePassword}>
+              <label className="block text-sm font-medium">
+                Current password
+                <input
+                  className={inputClass}
+                  type="password"
+                  autoComplete="current-password"
+                  maxLength={200}
+                  required
+                  value={stepUpPassword}
+                  onChange={(event) => {
+                    setStepUpPassword(event.target.value);
+                  }}
+                />
+              </label>
+              <label className="block text-sm font-medium">
+                New password
+                <input
+                  className={inputClass}
+                  type="password"
+                  autoComplete="new-password"
+                  minLength={12}
+                  maxLength={200}
+                  required
+                  value={newPassword}
+                  onChange={(event) => {
+                    setNewPassword(event.target.value);
+                  }}
+                />
+              </label>
+              <label className="block text-sm font-medium">
+                Confirm new password
+                <input
+                  className={inputClass}
+                  type="password"
+                  autoComplete="new-password"
+                  minLength={12}
+                  maxLength={200}
+                  required
+                  value={confirmPassword}
+                  onChange={(event) => {
+                    setConfirmPassword(event.target.value);
+                  }}
+                />
+              </label>
+              <div className="flex gap-3">
+                <button className={buttonClass} type="submit" disabled={pending}>
+                  {pending ? "Changing…" : "Change password"}
+                </button>
+                <button
+                  className={buttonClass}
+                  type="button"
+                  disabled={pending}
+                  onClick={() => {
+                    setStepUpBusyAction(null);
+                    setStepUpPassword("");
+                    setNewPassword("");
+                    setConfirmPassword("");
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          ) : (
+            <form className="mt-4 space-y-4" onSubmit={startStepUp}>
+              {!stepUpChallenge ? (
+                <label className="block text-sm font-medium">
+                  Current password
+                  <input
+                    className={inputClass}
+                    type="password"
+                    autoComplete="current-password"
+                    maxLength={200}
+                    required
+                    value={stepUpPassword}
+                    onChange={(event) => {
+                      setStepUpPassword(event.target.value);
+                    }}
+                  />
+                </label>
+              ) : (
+                <CodeInput
+                  id="settings-step-up-code"
+                  name="stepUpCode"
+                  label={stepUpChallenge.mfaType === "totp" ? "Authenticator code" : "Email code"}
+                  value={stepUpCode}
+                  onChange={setStepUpCode}
+                  length={6}
+                  inputClassName="min-h-12 w-full rounded-xl border border-stone-300 bg-white text-center font-mono text-xl text-stone-950 shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-stone-700 dark:bg-stone-950 dark:text-white"
+                />
+              )}
+              <div className="flex gap-3">
+                <button className={buttonClass} type="submit" disabled={pending}>
+                  {pending ? "Verifying…" : stepUpChallenge ? "Confirm security code" : "Continue"}
+                </button>
+                <button
+                  className={buttonClass}
+                  type="button"
+                  disabled={pending}
+                  onClick={() => {
+                    setStepUpBusyAction(null);
+                    setStepUpChallenge(null);
+                    setStepUpCode("");
+                    setStepUpPassword("");
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
+        </section>
+      )}
+      <section
+        aria-labelledby="password-heading"
+        className="rounded-2xl border border-stone-200 bg-white p-6 dark:border-stone-800 dark:bg-stone-900"
+      >
+        <h2 id="password-heading" className="text-lg font-semibold">
+          Password
+        </h2>
+        <p className="mt-2 text-sm text-stone-600 dark:text-stone-300">
+          Changing your password requires your current password and a fresh security-code check.
+        </p>
+        <button
+          type="button"
+          className={`${buttonClass} mt-4`}
+          onClick={() => {
+            requireStepUp("password");
+            setNewPassword("");
+            setConfirmPassword("");
+          }}
+          disabled={pending}
+        >
+          Change password
+        </button>
       </section>
 
       <section
@@ -429,24 +716,13 @@ export function SecuritySettings({
           Regenerate the ten single-use codes if you think the old set was seen. Regenerating
           immediately invalidates every previous code.
         </p>
-        <label className="mt-5 block text-sm font-medium">
-          Current password
-          <input
-            className="mt-2 min-h-11 w-full rounded-xl border border-stone-300 bg-white px-3 text-base text-stone-950 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-stone-700 dark:bg-stone-950 dark:text-white"
-            type="password"
-            autoComplete="current-password"
-            maxLength={200}
-            value={password}
-            onChange={(event) => {
-              setPassword(event.target.value);
-            }}
-          />
-        </label>
         <button
           type="button"
           className={`${buttonClass} mt-4`}
-          onClick={regenerateCodes}
-          disabled={pending || password.length === 0}
+          onClick={() => {
+            requireStepUp("recovery");
+          }}
+          disabled={pending}
         >
           Regenerate recovery codes
         </button>
@@ -462,6 +738,31 @@ export function SecuritySettings({
             ))}
           </ul>
         )}
+      </section>
+
+      <section
+        aria-labelledby="preferences-heading"
+        className="rounded-2xl border border-stone-200 bg-white p-6 dark:border-stone-800 dark:bg-stone-900"
+      >
+        <h2 id="preferences-heading" className="text-lg font-semibold">
+          Security notifications
+        </h2>
+        <p className="mt-2 text-sm text-stone-600 dark:text-stone-300">
+          Critical security alerts are always sent. You can choose whether to receive non-critical
+          notifications such as new-device sign-ins.
+        </p>
+        <label className="mt-4 flex items-start gap-3 text-sm">
+          <input
+            type="checkbox"
+            className="mt-1 size-4 accent-indigo-600"
+            checked={nonCriticalSecurityEmails}
+            disabled={securityEmailsBusy || pending}
+            onChange={(event) => {
+              toggleSecurityEmails(event.target.checked);
+            }}
+          />
+          <span>Email me about non-critical security activity</span>
+        </label>
       </section>
 
       <section
@@ -482,7 +783,9 @@ export function SecuritySettings({
               type="button"
               className={buttonClass}
               disabled={pending || items.every((session) => session.current)}
-              onClick={revokeOthers}
+              onClick={() => {
+                requireStepUp("revoke:others");
+              }}
             >
               Sign out other devices
             </button>
@@ -490,7 +793,9 @@ export function SecuritySettings({
               type="button"
               className={dangerClass}
               disabled={pending || items.length === 0}
-              onClick={revokeAll}
+              onClick={() => {
+                requireStepUp("revoke:all");
+              }}
             >
               Sign out everywhere
             </button>
@@ -526,7 +831,7 @@ export function SecuritySettings({
                     type="button"
                     className={buttonClass}
                     onClick={() => {
-                      revoke(session.id);
+                      requireStepUp(`revoke:${session.id}`);
                     }}
                     disabled={pending}
                   >

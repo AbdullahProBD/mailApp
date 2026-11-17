@@ -260,12 +260,13 @@ export type { RequestContext } from "@/lib/security/request-context";
 export interface SessionFingerprint {
   ipHash: string;
   userAgent: string | null;
+  country?: string | null | undefined;
 }
 
 export async function getSessionFingerprint(): Promise<SessionFingerprint> {
   const requestHeaders = await headers();
   const context = getRequestContext(requestHeaders);
-  return { ipHash: context.ipHash, userAgent: context.userAgent };
+  return { ipHash: context.ipHash, userAgent: context.userAgent, country: context.country };
 }
 
 /**

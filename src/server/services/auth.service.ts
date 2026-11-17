@@ -16,6 +16,7 @@ import {
   completeOwnerSetup,
   getOwnerProfile,
   setOwnerPasswordHash,
+  setOwnerNonCriticalSecurityEmails,
   confirmSetupRecoveryCodes,
   clearSetupRecoveryConfirmation,
   updateOwnerProfile,
@@ -31,6 +32,7 @@ import {
   listMfaMethods,
   recordMfaStep,
   setPreferredMfaMethod,
+  removeVerifiedMfaMethod,
   upsertMfaMethod,
   verifyMfaMethod,
 } from "@/server/repositories/mfa-methods.repository";
@@ -46,6 +48,7 @@ import {
   revokeAllSessions,
   revokeOtherSessions,
   revokeSession,
+  markSessionStepUpVerified,
   type SessionRecord,
 } from "@/server/repositories/sessions.repository";
 import {
@@ -61,9 +64,11 @@ import {
   type SessionFingerprint,
   rotateSessionToken,
   setSessionCookie,
+  getSessionFingerprint,
 } from "@/server/services/session.service";
 import { createEmailOtp, createTotpSetup, verifyTotpCode } from "@/server/services/totp.service";
 import { sendOwnerOtp } from "@/server/services/otp-mailer.service";
+import { describeDevice } from "@/lib/auth/device";
 
 const EMAIL_SCHEMA = z.email().max(320);
 const identitySchema = z.object({
@@ -77,6 +82,7 @@ const loginSchema = z.object({
   password: z.string().min(1).max(200),
   ipHash: z.string().min(16).max(128),
   userAgent: z.string().max(512).nullable(),
+  country: z.string().length(2).nullable().optional(),
 });
 const verifyChallengeSchema = z.object({
   challengeId: z.uuid(),
@@ -85,6 +91,7 @@ const verifyChallengeSchema = z.object({
   fingerprint: z.object({
     ipHash: z.string().min(16).max(128),
     userAgent: z.string().max(512).nullable(),
+    country: z.string().length(2).nullable().optional(),
   }),
   now: z.date().optional(),
 });
@@ -115,6 +122,7 @@ export interface SetupEmailOtpChallenge {
 const GENERIC_AUTH_FAILURE = "The email or password is incorrect.";
 const IDENTITY_WINDOW_SECONDS = 15 * 60;
 const CHALLENGE_TTL_MS = 10 * 60 * 1000;
+const STEP_UP_TTL_MS = 10 * 60 * 1000;
 const LOGIN_DELAY_BASE_MS = 250;
 const LOGIN_DELAY_MAX_MS = 8_000;
 const LOGIN_FAILURE_LIMIT = 10;
@@ -134,6 +142,43 @@ function recoveryDigest(code: string): string {
 
 function setupRateKey(scope: string, ipHash: string): string {
   return `auth:setup:${scope}:${ipHash}`;
+}
+
+/** One OTP delivery per owner per minute and at most ten deliveries per day. */
+async function consumeOtpDeliveryBudget(ownerId: string, now: Date): Promise<boolean> {
+  const daily = await consumeDistributedRateLimit(
+    { key: `auth:otp-send:owner:${ownerId}:daily`, limit: 10, windowSeconds: 86_400 },
+    now,
+  );
+  if (!daily.allowed) return false;
+  const cooldown = await consumeDistributedRateLimit(
+    { key: `auth:otp-send:owner:${ownerId}:cooldown`, limit: 1, windowSeconds: 60 },
+    now,
+  );
+  return cooldown.allowed;
+}
+
+async function sendSecurityNotice(input: {
+  ownerId: string;
+  subject: string;
+  details: string;
+  critical: boolean;
+  now?: Date;
+  providerId?: string;
+}): Promise<void> {
+  try {
+    const owner = await getOwnerProfile();
+    if (
+      !owner ||
+      owner.id !== input.ownerId ||
+      (!input.critical && !owner.nonCriticalSecurityEmails)
+    )
+      return;
+    const { sendOwnerSecurityNotice } = await import("@/server/services/otp-mailer.service");
+    await sendOwnerSecurityNotice(input);
+  } catch {
+    // Delivery problems must never roll back authentication or security changes.
+  }
 }
 
 /** Step 1: validate the configured identity and setup token with hard limits. */
@@ -267,6 +312,8 @@ export async function configureEmailOtpSetup(
     })
     .safeParse(input);
   if (!owner || owner.setupCompletedAt || !owner.passwordHash || !parsed.success) return null;
+  const now = new Date();
+  if (!(await consumeOtpDeliveryBudget(owner.id, now))) return null;
   const emailSetupRate = await consumeDistributedRateLimit({
     key: setupRateKey("email-otp", proof.ipHash),
     limit: 3,
@@ -285,7 +332,7 @@ export async function configureEmailOtpSetup(
   });
   const challengeToken = generateToken(32);
   const challengeId = randomUUID();
-  const expiresAt = new Date(Date.now() + CHALLENGE_TTL_MS);
+  const expiresAt = new Date(now.getTime() + CHALLENGE_TTL_MS);
   const browserBindingHash = hmacSha256Hex(
     `${proof.ipHash}:${challengeToken}`,
     getServerEnv().SESSION_PEPPER,
@@ -304,7 +351,7 @@ export async function configureEmailOtpSetup(
       otpHmac: hmacSha256Hex(`${challengeId}:${code}`, getServerEnv().SESSION_PEPPER),
     },
   });
-  const delivery = await sendOwnerOtp({ code, now: new Date(), providerId: provider.id });
+  const delivery = await sendOwnerOtp({ code, now, providerId: provider.id });
   if (!delivery.ok) {
     await consumeAuthChallenge(challengeId);
     const { deleteSenderProvider } =
@@ -327,6 +374,8 @@ export async function resendSetupEmailOtp(
   const parsedProvider = z.uuid().safeParse(providerId);
   if (!owner || owner.setupCompletedAt || !owner.passwordHash || !parsedProvider.success)
     return null;
+  const now = new Date();
+  if (!(await consumeOtpDeliveryBudget(owner.id, now))) return null;
   const cooldown = await consumeDistributedRateLimit({
     key: setupRateKey("email-resend", proof.ipHash),
     limit: 5,
@@ -337,7 +386,7 @@ export async function resendSetupEmailOtp(
     await import("@/server/repositories/mail-sender-providers.repository");
   const providers = await listSenderProviders();
   const provider = providers.find((entry) => entry.id === parsedProvider.data);
-  if (!provider || Date.now() - provider.createdAt.getTime() > 30 * 60_000) return null;
+  if (!provider || now.getTime() - provider.createdAt.getTime() > 30 * 60_000) return null;
 
   const code = createEmailOtp(6);
   const challengeId = randomUUID();
@@ -350,7 +399,7 @@ export async function resendSetupEmailOtp(
       `${proof.ipHash}:${challengeToken}`,
       getServerEnv().SESSION_PEPPER,
     ),
-    expiresAt: new Date(Date.now() + CHALLENGE_TTL_MS),
+    expiresAt: new Date(now.getTime() + CHALLENGE_TTL_MS),
     data: {
       ownerId: owner.id,
       setupChallengeId: proof.challengeId,
@@ -359,7 +408,7 @@ export async function resendSetupEmailOtp(
       otpHmac: hmacSha256Hex(`${challengeId}:${code}`, getServerEnv().SESSION_PEPPER),
     },
   });
-  const delivery = await sendOwnerOtp({ code, now: new Date(), providerId: provider.id });
+  const delivery = await sendOwnerOtp({ code, now, providerId: provider.id });
   if (!delivery.ok) {
     await consumeAuthChallenge(challengeId);
     return null;
@@ -644,7 +693,7 @@ export async function authenticatePassword(
     await burnPasswordVerification("invalid-input-dummy-password");
     return { ok: false, error: "invalid" };
   }
-  const { email, password, ipHash, userAgent } = parsed.data;
+  const { email, password, ipHash, userAgent, country } = parsed.data;
   const ipLimit = await consumeDistributedRateLimit(
     { key: `auth:login:ip:${ipHash}`, limit: LOGIN_FAILURE_LIMIT, windowSeconds: 15 * 60 },
     now,
@@ -717,6 +766,9 @@ export async function authenticatePassword(
     return { ok: false, error: "unavailable" };
   }
   const emailOtp = preferredMethod.type === "email_otp" ? createEmailOtp(6) : null;
+  if (emailOtp && !(await consumeOtpDeliveryBudget(owner.id, now))) {
+    return { ok: false, error: "locked" };
+  }
   const challenge = await createAuthChallenge({
     id: challengeId,
     purpose: "login_mfa",
@@ -732,7 +784,13 @@ export async function authenticatePassword(
     },
   });
   if (emailOtp && emailProviderId) {
-    const delivery = await sendOwnerOtp({ code: emailOtp, now, providerId: emailProviderId });
+    const delivery = await sendOwnerOtp({
+      code: emailOtp,
+      now,
+      providerId: emailProviderId,
+      country,
+      userAgent,
+    });
     if (!delivery.ok) {
       await consumeAuthChallenge(challenge.id, now);
       return { ok: false, error: "unavailable" };
@@ -744,6 +802,100 @@ export async function authenticatePassword(
     challengeToken,
     bindingHash,
     mfaType: preferredMethod.type,
+  };
+}
+
+export async function resendLoginEmailOtp(
+  input: unknown,
+  now = new Date(),
+): Promise<
+  | {
+      ok: true;
+      challengeId: string;
+      challengeToken: string;
+      bindingHash: string;
+      mfaType: "totp" | "email_otp";
+    }
+  | { ok: false; error: AuthFailure }
+> {
+  const parsed = z
+    .object({
+      challengeId: z.uuid(),
+      challengeToken: z.string().min(40).max(128),
+      fingerprint: z.object({
+        ipHash: z.string().min(16).max(128),
+        userAgent: z.string().max(512).nullable(),
+        country: z.string().length(2).nullable().optional(),
+      }),
+    })
+    .safeParse(input);
+  if (!parsed.success) return { ok: false, error: "invalid" };
+  const { challengeId, challengeToken, fingerprint } = parsed.data;
+  const challenge = await findUsableAuthChallenge(challengeId, now, 5);
+  if (
+    !challenge ||
+    challenge.purpose !== "login_mfa" ||
+    !challenge.codeHmac ||
+    !challenge.browserBindingHash ||
+    !constantTimeEqual(computeBrowserBinding(fingerprint), challenge.browserBindingHash) ||
+    !constantTimeEqual(
+      hmacSha256Hex(challengeToken, getServerEnv().SESSION_PEPPER),
+      challenge.codeHmac,
+    )
+  ) {
+    return { ok: false, error: "invalid" };
+  }
+  if (challenge.data.mfaType !== "email_otp") return { ok: false, error: "invalid" };
+  const owner = await getOwnerProfile();
+  if (!owner?.setupCompletedAt || challenge.data.ownerId !== owner.id) {
+    return { ok: false, error: "invalid" };
+  }
+  const method = await getVerifiedMfaMethod(owner.id, "email_otp");
+  if (!method?.secretEncrypted) return { ok: false, error: "unavailable" };
+  let providerId: string;
+  try {
+    providerId = decryptString(method.secretEncrypted, {
+      table: "mfa_methods",
+      rowId: method.id,
+    });
+  } catch {
+    return { ok: false, error: "unavailable" };
+  }
+  if (!z.uuid().safeParse(providerId).success) return { ok: false, error: "unavailable" };
+  if (!(await consumeOtpDeliveryBudget(owner.id, now))) return { ok: false, error: "locked" };
+  const otp = createEmailOtp(6);
+  const nextId = randomUUID();
+  const nextToken = generateToken(32);
+  await createAuthChallenge({
+    id: nextId,
+    purpose: "login_mfa",
+    codeHmac: hmacSha256Hex(nextToken, getServerEnv().SESSION_PEPPER),
+    browserBindingHash: computeBrowserBinding(fingerprint),
+    expiresAt: new Date(now.getTime() + CHALLENGE_TTL_MS),
+    data: {
+      ownerId: owner.id,
+      mfaType: "email_otp",
+      otpHmac: hmacSha256Hex(`${nextId}:${otp}`, getServerEnv().SESSION_PEPPER),
+    },
+  });
+  const delivery = await sendOwnerOtp({
+    code: otp,
+    now,
+    providerId,
+    country: fingerprint.country,
+    userAgent: fingerprint.userAgent,
+  });
+  if (!delivery.ok) {
+    await consumeAuthChallenge(nextId, now);
+    return { ok: false, error: "unavailable" };
+  }
+  await consumeAuthChallenge(challengeId, now);
+  return {
+    ok: true,
+    challengeId: nextId,
+    challengeToken: nextToken,
+    bindingHash: computeBrowserBinding(fingerprint),
+    mfaType: "email_otp",
   };
 }
 
@@ -759,11 +911,15 @@ export async function completeEmailOtpLogin(
     fingerprint: z.object({
       ipHash: z.string().min(16).max(128),
       userAgent: z.string().max(512).nullable(),
+      country: z.string().length(2).nullable().optional(),
     }),
     now: z.date().optional(),
   });
   const parsed = schema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "invalid" };
+  const owner = await getOwnerProfile();
+  if (!owner?.setupCompletedAt) return { ok: false, error: "invalid" };
+  const ownerId = owner.id;
   const { challengeId, challengeToken, code, fingerprint } = parsed.data;
   const now = parsed.data.now ?? new Date();
   const rate = await consumeDistributedRateLimit(
@@ -771,7 +927,7 @@ export async function completeEmailOtpLogin(
     now,
   );
   if (!rate.allowed) return { ok: false, error: "locked" };
-  return withTransaction(getDb(), async (tx) => {
+  const result = await withTransaction(getDb(), async (tx) => {
     const challenge = await findUsableAuthChallenge(challengeId, now, 5, tx);
     const expectedToken = hmacSha256Hex(challengeToken, getServerEnv().SESSION_PEPPER);
     const binding = computeBrowserBinding(fingerprint);
@@ -852,6 +1008,17 @@ export async function completeEmailOtpLogin(
     );
     return { ok: true, sessionId: session.id, token } as const;
   });
+  if (result.ok) {
+    void sendSecurityNotice({
+      ownerId,
+      subject: "Mail sign-in notification",
+      details:
+        "A security code was used to verify a sign-in. If this wasn't you, secure your account immediately.",
+      critical: false,
+      now,
+    });
+  }
+  return result;
 }
 
 export async function completeTotpLogin(
@@ -861,6 +1028,7 @@ export async function completeTotpLogin(
   if (!parsed.success) return { ok: false, error: "invalid" };
   const { challengeId, challengeToken, code, fingerprint } = parsed.data;
   const now = parsed.data.now ?? new Date();
+  let noticeOwnerId = "";
   const limit = await consumeDistributedRateLimit(
     { key: `auth:totp:${fingerprint.ipHash}`, limit: TOTP_RATE_LIMIT, windowSeconds: 15 * 60 },
     now,
@@ -870,7 +1038,7 @@ export async function completeTotpLogin(
     now,
   );
   if (!limit.allowed || !attemptLimit.allowed) return { ok: false, error: "locked" };
-  return withTransaction(getDb(), async (tx) => {
+  const result = await withTransaction(getDb(), async (tx) => {
     const challenge = await findUsableAuthChallenge(challengeId, now, 5, tx);
     const binding = computeBrowserBinding(fingerprint);
     const submittedTokenHash = hmacSha256Hex(challengeToken, getServerEnv().SESSION_PEPPER);
@@ -891,6 +1059,7 @@ export async function completeTotpLogin(
       challenge.data.mfaType !== "totp"
     )
       return { ok: false, error: "invalid" } as const;
+    noticeOwnerId = owner.id;
     const method = await getVerifiedMfaMethod(owner.id, "totp", tx);
     if (!method?.secretEncrypted) return { ok: false, error: "invalid" } as const;
     let storedSecret: string;
@@ -964,6 +1133,17 @@ export async function completeTotpLogin(
     );
     return { ok: true, sessionId: session.id, token } as const;
   });
+  if (result.ok && noticeOwnerId !== "") {
+    void sendSecurityNotice({
+      ownerId: noticeOwnerId,
+      subject: "Mail sign-in notification",
+      details:
+        "A security code was used to verify a sign-in. If this wasn't you, secure your account immediately.",
+      critical: false,
+      now,
+    });
+  }
+  return result;
 }
 
 /** Consumes a challenge token with a single-use recovery code. */
@@ -997,6 +1177,7 @@ export async function completeRecoveryLogin(
     return null;
   const owner = await getOwnerProfile();
   if (!owner?.setupCompletedAt || challenge.data.ownerId !== owner.id) return null;
+  const ownerId = owner.id;
   const code = normalizeRecoveryCode(recoveryCode);
   const row = await findUnusedRecoveryCode(recoveryDigest(code));
   if (!row) {
@@ -1010,7 +1191,7 @@ export async function completeRecoveryLogin(
     });
     return null;
   }
-  return withTransaction(getDb(), async (tx) => {
+  const result = await withTransaction(getDb(), async (tx) => {
     if (
       !(await consumeRecoveryCode(row.id, now, tx)) ||
       !(await consumeAuthChallenge(challengeId, now, tx))
@@ -1046,6 +1227,22 @@ export async function completeRecoveryLogin(
     );
     return { sessionId: session.id, token };
   });
+  if (result) {
+    void sendSecurityNotice({
+      ownerId,
+      subject: "Recovery code used",
+      details: [
+        "A single-use recovery code was used to sign in.",
+        `Device: ${describeDevice(fingerprint.userAgent ?? null).browser} on ${describeDevice(fingerprint.userAgent ?? null).platform}.`,
+        fingerprint.country
+          ? `Approximate location: ${fingerprint.country}.`
+          : "Location unavailable.",
+      ].join("\n"),
+      critical: true,
+      now,
+    });
+  }
+  return result;
 }
 
 export async function getOwner(): Promise<{
@@ -1059,6 +1256,231 @@ export async function getOwner(): Promise<{
   return { owner, session: current.record };
 }
 
+function sessionHasFreshStepUp(session: SessionRecord, now: Date): boolean {
+  const verifiedAt = session.stepUpVerifiedAt?.getTime();
+  return (
+    verifiedAt !== undefined &&
+    verifiedAt <= now.getTime() &&
+    now.getTime() - verifiedAt < STEP_UP_TTL_MS
+  );
+}
+
+export async function isOwnerStepUpFresh(now = new Date()): Promise<boolean> {
+  const authenticated = await getOwner();
+  return Boolean(authenticated && sessionHasFreshStepUp(authenticated.session, now));
+}
+
+export interface OwnerStepUpChallenge {
+  challengeId: string;
+  challengeToken: string;
+  mfaType: "totp" | "email_otp";
+}
+
+/** Starts a fresh password-plus-MFA proof for sensitive account operations. */
+export async function beginOwnerStepUp(
+  currentPassword: string,
+  now = new Date(),
+): Promise<OwnerStepUpChallenge | null> {
+  const authenticated = await getOwner();
+  const parsedPassword = z.string().min(1).max(200).safeParse(currentPassword);
+  if (!authenticated?.owner.passwordHash || !parsedPassword.success) return null;
+
+  const initialFingerprint = await getSessionFingerprint();
+  const [sessionRate, ipRate] = await Promise.all([
+    consumeDistributedRateLimit(
+      {
+        key: `auth:step-up:session:${authenticated.session.id}`,
+        limit: 10,
+        windowSeconds: 15 * 60,
+      },
+      now,
+    ),
+    consumeDistributedRateLimit(
+      { key: `auth:step-up:ip:${initialFingerprint.ipHash}`, limit: 20, windowSeconds: 15 * 60 },
+      now,
+    ),
+  ]);
+  const passwordMatches = await verifyPassword(
+    authenticated.owner.passwordHash,
+    parsedPassword.data,
+  );
+  if (!sessionRate.allowed || !ipRate.allowed || !passwordMatches) {
+    await appendAuditEntry({
+      action: "auth.step_up.password_failed",
+      actor: actorForAudit(),
+      targetType: "owner",
+      targetId: authenticated.owner.id,
+      ipHash: initialFingerprint.ipHash,
+    });
+    return null;
+  }
+
+  const methods = await listMfaMethods(authenticated.owner.id);
+  const method =
+    methods.find((entry) => entry.preferred && entry.verifiedAt) ??
+    methods.find((entry) => entry.verifiedAt);
+  if (!method) return null;
+
+  let providerId: string | null = null;
+  let otp: string | null = null;
+  if (method.type === "email_otp") {
+    if (!method.secretEncrypted) return null;
+    try {
+      providerId = decryptString(method.secretEncrypted, {
+        table: "mfa_methods",
+        rowId: method.id,
+      });
+    } catch {
+      return null;
+    }
+    if (!z.uuid().safeParse(providerId).success) return null;
+    otp = createEmailOtp(6);
+  }
+
+  const challengeToken = generateToken(32);
+  const challengeId = randomUUID();
+  const challenge = await createAuthChallenge({
+    id: challengeId,
+    purpose: "step_up",
+    codeHmac: hmacSha256Hex(challengeToken, getServerEnv().SESSION_PEPPER),
+    browserBindingHash: computeBrowserBinding(initialFingerprint),
+    expiresAt: new Date(now.getTime() + CHALLENGE_TTL_MS),
+    data: {
+      ownerId: authenticated.owner.id,
+      sessionId: authenticated.session.id,
+      mfaType: method.type,
+      ...(otp
+        ? { otpHmac: hmacSha256Hex(`${challengeId}:${otp}`, getServerEnv().SESSION_PEPPER) }
+        : {}),
+    },
+  });
+
+  if (otp && providerId) {
+    const delivery = await sendOwnerOtp({
+      code: otp,
+      now,
+      providerId,
+      country: initialFingerprint.country,
+      userAgent: initialFingerprint.userAgent,
+    });
+    if (!delivery.ok) {
+      await consumeAuthChallenge(challenge.id, now);
+      return null;
+    }
+  }
+
+  return { challengeId, challengeToken, mfaType: method.type };
+}
+
+/** Consumes a step-up challenge and records a ten-minute proof on the session. */
+export async function completeOwnerStepUp(input: unknown, now = new Date()): Promise<boolean> {
+  const parsed = z
+    .object({
+      challengeId: z.uuid(),
+      challengeToken: z.string().min(40).max(128),
+      code: z.string().min(1).max(20),
+    })
+    .safeParse(input);
+  const authenticated = await getOwner();
+  if (!parsed.success || !authenticated) return false;
+
+  const fingerprint = await getSessionFingerprint();
+  const [sessionRate, ipRate] = await Promise.all([
+    consumeDistributedRateLimit(
+      {
+        key: `auth:step-up:verify:session:${authenticated.session.id}`,
+        limit: 20,
+        windowSeconds: 15 * 60,
+      },
+      now,
+    ),
+    consumeDistributedRateLimit(
+      {
+        key: `auth:step-up:verify:ip:${fingerprint.ipHash}`,
+        limit: 40,
+        windowSeconds: 15 * 60,
+      },
+      now,
+    ),
+  ]);
+  if (!sessionRate.allowed || !ipRate.allowed) return false;
+
+  const nextSession = await withTransaction(getDb(), async (tx) => {
+    const challenge = await findUsableAuthChallenge(parsed.data.challengeId, now, 5, tx);
+    const suppliedToken = hmacSha256Hex(parsed.data.challengeToken, getServerEnv().SESSION_PEPPER);
+    if (
+      !challenge ||
+      challenge.purpose !== "step_up" ||
+      challenge.data.ownerId !== authenticated.owner.id ||
+      challenge.data.sessionId !== authenticated.session.id ||
+      !challenge.codeHmac ||
+      !challenge.browserBindingHash ||
+      !constantTimeEqual(challenge.codeHmac, suppliedToken) ||
+      !constantTimeEqual(challenge.browserBindingHash, computeBrowserBinding(fingerprint))
+    )
+      return null;
+
+    let verified = false;
+    if (challenge.data.mfaType === "totp") {
+      const method = await getVerifiedMfaMethod(authenticated.owner.id, "totp", tx);
+      if (method?.secretEncrypted) {
+        try {
+          const secret = decryptString(method.secretEncrypted, {
+            table: "mfa_methods",
+            rowId: method.id,
+          });
+          const result = verifyTotpCode(secret, parsed.data.code, authenticated.owner.email, now);
+          verified =
+            result.valid &&
+            result.step !== null &&
+            (await recordMfaStep(authenticated.owner.id, "totp", result.step, tx));
+        } catch {
+          verified = false;
+        }
+      }
+    } else if (challenge.data.mfaType === "email_otp") {
+      const storedOtp = z.string().length(64).safeParse(challenge.data.otpHmac);
+      const suppliedOtp = hmacSha256Hex(
+        `${challenge.id}:${parsed.data.code}`,
+        getServerEnv().SESSION_PEPPER,
+      );
+      verified = storedOtp.success && constantTimeEqual(storedOtp.data, suppliedOtp);
+    }
+
+    if (!verified) {
+      await recordChallengeFailure(challenge.id, now, tx);
+      await appendAuditEntry(
+        {
+          action: "auth.step_up.failed",
+          actor: actorForAudit(),
+          targetType: "owner",
+          targetId: authenticated.owner.id,
+          ipHash: authenticated.session.ipHash ?? undefined,
+        },
+        tx,
+      );
+      return null;
+    }
+    if (!(await consumeAuthChallenge(challenge.id, now, tx))) return null;
+    if (!(await markSessionStepUpVerified(authenticated.session.id, now, tx))) return null;
+    await appendAuditEntry(
+      {
+        action: "auth.step_up.succeeded",
+        actor: actorForAudit(),
+        targetType: "owner",
+        targetId: authenticated.owner.id,
+        ipHash: authenticated.session.ipHash ?? undefined,
+      },
+      tx,
+    );
+    return rotateSessionToken(authenticated.session.id, now, tx);
+  });
+
+  if (!nextSession) return false;
+  await setSessionCookie(nextSession);
+  return true;
+}
+
 export async function completeLoginWithRecovery(input: unknown) {
   const schema = z.object({
     challengeId: z.uuid(),
@@ -1067,6 +1489,7 @@ export async function completeLoginWithRecovery(input: unknown) {
     fingerprint: z.object({
       ipHash: z.string().min(16).max(128),
       userAgent: z.string().max(512).nullable(),
+      country: z.string().length(2).nullable().optional(),
     }),
   });
   const parsed = schema.safeParse(input);
@@ -1108,6 +1531,7 @@ export async function beginPasswordReset(
       email: EMAIL_SCHEMA,
       ipHash: z.string().min(16).max(128),
       userAgent: z.string().max(512).nullable(),
+      country: z.string().length(2).nullable().optional(),
     })
     .safeParse(input);
   if (!parsed.success) return { ok: false, error: "invalid" };
@@ -1178,7 +1602,13 @@ export async function beginPasswordReset(
   });
 
   if (otp && providerId) {
-    const delivery = await sendOwnerOtp({ code: otp, now, providerId });
+    const delivery = await sendOwnerOtp({
+      code: otp,
+      now,
+      providerId,
+      country: parsed.data.country,
+      userAgent: parsed.data.userAgent,
+    });
     if (!delivery.ok) {
       await consumeAuthChallenge(challengeId, now);
       return { ok: false, error: "unavailable" };
@@ -1208,6 +1638,7 @@ export async function verifyPasswordReset(
       fingerprint: z.object({
         ipHash: z.string().min(16).max(128),
         userAgent: z.string().max(512).nullable(),
+        country: z.string().length(2).nullable().optional(),
       }),
       code: z
         .string()
@@ -1217,16 +1648,15 @@ export async function verifyPasswordReset(
     })
     .safeParse(input);
   if (!parsed.success) return { ok: false, error: "invalid" };
-  if (!parsed.data.code && !parsed.data.recoveryCode) return { ok: false, error: "invalid" };
-
-  const { challengeId, challengeToken, fingerprint } = parsed.data;
+  const { challengeId, challengeToken, fingerprint, recoveryCode, code } = parsed.data;
+  let noticeOwnerId = "";
   const rate = await consumeDistributedRateLimit(
     { key: `auth:reset:verify:${fingerprint.ipHash}`, limit: 10, windowSeconds: 15 * 60 },
     now,
   );
   if (!rate.allowed) return { ok: false, error: "locked" };
 
-  return withTransaction(getDb(), async (tx) => {
+  const result = await withTransaction(getDb(), async (tx) => {
     const challenge = await findUsableAuthChallenge(challengeId, now, 5, tx);
     const binding = computeBrowserBinding(fingerprint);
     if (
@@ -1247,10 +1677,11 @@ export async function verifyPasswordReset(
     if (!owner?.setupCompletedAt || challenge.data.ownerId !== owner.id) {
       return { ok: false, error: "invalid" } as const;
     }
+    noticeOwnerId = owner.id;
 
     let proven = false;
-    if (parsed.data.recoveryCode) {
-      const row = await findUnusedRecoveryCode(recoveryDigest(parsed.data.recoveryCode), tx);
+    if (recoveryCode) {
+      const row = await findUnusedRecoveryCode(recoveryDigest(recoveryCode), tx);
       proven = row !== null && (await consumeRecoveryCode(row.id, now, tx));
       if (proven) {
         await appendAuditEntry(
@@ -1264,13 +1695,10 @@ export async function verifyPasswordReset(
           tx,
         );
       }
-    } else if (parsed.data.code) {
+    } else if (code) {
       if (challenge.data.mfaType === "email_otp") {
         const stored = z.string().length(64).safeParse(challenge.data.otpHmac);
-        const supplied = hmacSha256Hex(
-          `${challenge.id}:${parsed.data.code}`,
-          getServerEnv().SESSION_PEPPER,
-        );
+        const supplied = hmacSha256Hex(`${challenge.id}:${code}`, getServerEnv().SESSION_PEPPER);
         proven = stored.success && constantTimeEqual(stored.data, supplied);
       } else if (challenge.data.mfaType === "totp") {
         const method = await getVerifiedMfaMethod(owner.id, "totp", tx);
@@ -1280,7 +1708,7 @@ export async function verifyPasswordReset(
               table: "mfa_methods",
               rowId: method.id,
             });
-            const result = verifyTotpCode(secret, parsed.data.code, owner.email, now);
+            const result = verifyTotpCode(secret, code, owner.email, now);
             proven =
               result.valid &&
               result.step !== null &&
@@ -1328,6 +1756,17 @@ export async function verifyPasswordReset(
 
     return { ok: true, challengeId: nextId, challengeToken: nextToken } as const;
   });
+  if (result.ok && recoveryCode && noticeOwnerId !== "") {
+    const ownerId = noticeOwnerId;
+    void sendSecurityNotice({
+      ownerId,
+      subject: "Recovery code used",
+      details: "A single-use recovery code was used during password recovery.",
+      critical: true,
+      now,
+    });
+  }
+  return result;
 }
 
 /**
@@ -1350,6 +1789,7 @@ export async function completePasswordReset(
       fingerprint: z.object({
         ipHash: z.string().min(16).max(128),
         userAgent: z.string().max(512).nullable(),
+        country: z.string().length(2).nullable().optional(),
       }),
     })
     .safeParse(input);
@@ -1405,30 +1845,107 @@ export async function completePasswordReset(
       tx,
     );
   });
+  void sendSecurityNotice({
+    ownerId: owner.id,
+    subject: "Mail password reset",
+    details: "Your account password was changed after recovery. All sessions were revoked.",
+    critical: true,
+    now,
+  });
 
   return { ok: true };
 }
 
 /**
- * Replaces the recovery-code set after re-entering the current password.
- *
- * The repository deletes the previous rows, so an old code can never be used
- * again even if it was photographed before regeneration.
+ * Replaces the recovery-code set after a fresh password-plus-MFA step-up.
+ * The repository deletes the previous rows, so old codes cannot be reused.
  */
-export async function regenerateOwnerRecoveryCodes(
+export async function changeOwnerPassword(
   currentPassword: string,
-): Promise<string[] | null> {
+  newPassword: string,
+  now = new Date(),
+): Promise<
+  { ok: true } | { ok: false; error: "invalid" | "locked" | "policy" | "breached" | "unavailable" }
+> {
+  const parsed = z
+    .object({
+      currentPassword: z.string().min(1).max(200),
+      newPassword: z.string().min(12).max(200),
+    })
+    .safeParse({ currentPassword, newPassword });
   const authenticated = await getOwner();
-  if (!authenticated?.owner.passwordHash) return null;
-  const parsed = z.string().min(1).max(200).safeParse(currentPassword);
-  if (!parsed.success) return null;
+  if (!authenticated || !sessionHasFreshStepUp(authenticated.session, now) || !parsed.success) {
+    return { ok: false, error: "invalid" };
+  }
+  const rate = await consumeDistributedRateLimit(
+    { key: `auth:password:change:${authenticated.session.id}`, limit: 5, windowSeconds: 15 * 60 },
+    now,
+  );
+  if (!rate.allowed) return { ok: false, error: "locked" };
+  if (
+    !authenticated.owner.passwordHash ||
+    !(await verifyPassword(authenticated.owner.passwordHash, parsed.data.currentPassword))
+  ) {
+    await appendAuditEntry({
+      action: "auth.password.change_failed",
+      actor: actorForAudit(),
+      targetType: "owner",
+      targetId: authenticated.owner.id,
+      ipHash: authenticated.session.ipHash ?? undefined,
+    });
+    return { ok: false, error: "invalid" };
+  }
+  if (!evaluatePassword(parsed.data.newPassword, authenticated.owner.email).acceptable) {
+    return { ok: false, error: "policy" };
+  }
+  const breach = await checkPasswordBreach(parsed.data.newPassword);
+  if (breach === "unavailable") return { ok: false, error: "unavailable" };
+  if (breach === "breached") return { ok: false, error: "breached" };
+  const passwordHash = await hashPassword(parsed.data.newPassword);
+  await updateOwnerProfile(authenticated.owner.id, { passwordHash });
+  await appendAuditEntry({
+    action: "auth.password.changed",
+    actor: actorForAudit(),
+    targetType: "owner",
+    targetId: authenticated.owner.id,
+    ipHash: authenticated.session.ipHash ?? undefined,
+  });
+  void sendSecurityNotice({
+    ownerId: authenticated.owner.id,
+    subject: "Mail password changed",
+    details: "Your account password was changed after a fresh password-and-security-code check.",
+    critical: true,
+    now,
+  });
+  return { ok: true };
+}
+
+export async function setOwnerNonCriticalSecurityEmailPreference(
+  enabled: boolean,
+): Promise<boolean> {
+  const authenticated = await getOwner();
+  if (!authenticated || !z.boolean().safeParse(enabled).success) return false;
+  await setOwnerNonCriticalSecurityEmails(authenticated.owner.id, enabled);
+  await appendAuditEntry({
+    action: "auth.security_preference.changed",
+    actor: actorForAudit(),
+    targetType: "owner",
+    targetId: authenticated.owner.id,
+    ipHash: authenticated.session.ipHash ?? undefined,
+    metadata: { nonCriticalSecurityEmails: enabled },
+  });
+  return true;
+}
+
+export async function regenerateOwnerRecoveryCodes(): Promise<string[] | null> {
+  const authenticated = await getOwner();
+  if (!authenticated || !sessionHasFreshStepUp(authenticated.session, new Date())) return null;
   const rate = await consumeDistributedRateLimit({
     key: `auth:recovery:regenerate:${authenticated.session.id}`,
     limit: 5,
     windowSeconds: 60 * 60,
   });
-  if (!rate.allowed) return null;
-  if (!(await verifyPassword(authenticated.owner.passwordHash, parsed.data))) return null;
+  if (!rate.allowed || !authenticated.owner.passwordHash) return null;
   const codes = Array.from({ length: 10 }, generateRecoveryCode);
   await replaceRecoveryCodes({
     ownerId: authenticated.owner.id,
@@ -1468,6 +1985,7 @@ export async function revokeOwnerSession(sessionId: string, now = new Date()): P
   const authenticated = await getOwner();
   if (
     !authenticated ||
+    !sessionHasFreshStepUp(authenticated.session, now) ||
     !z.uuid().safeParse(sessionId).success ||
     authenticated.session.id === sessionId
   )
@@ -1486,9 +2004,31 @@ export async function revokeOwnerSession(sessionId: string, now = new Date()): P
   return true;
 }
 
+export async function removeOwnerMfaMethod(type: "totp" | "email_otp"): Promise<boolean> {
+  const authenticated = await getOwner();
+  if (!authenticated || !sessionHasFreshStepUp(authenticated.session, new Date())) return false;
+  const removed = await removeVerifiedMfaMethod(authenticated.owner.id, type);
+  if (!removed) return false;
+  await withTransaction(getDb(), async (tx) => {
+    await appendAuditEntry(
+      {
+        action: "auth.mfa.removed",
+        actor: actorForAudit(),
+        targetType: "owner",
+        targetId: authenticated.owner.id,
+        ipHash: authenticated.session.ipHash ?? undefined,
+        metadata: { method: type },
+      },
+      tx,
+    );
+  });
+  await setSessionCookie(await rotateSessionToken(authenticated.session.id));
+  return true;
+}
+
 export async function setOwnerPreferredMfaMethod(type: "totp" | "email_otp"): Promise<boolean> {
   const authenticated = await getOwner();
-  if (!authenticated) return false;
+  if (!authenticated || !sessionHasFreshStepUp(authenticated.session, new Date())) return false;
   const changed = await setPreferredMfaMethod(authenticated.owner.id, type);
   if (!changed) return false;
   // Changing the second factor is a privilege change, so the session token is
@@ -1521,7 +2061,7 @@ export async function beginOwnerTotpEnrollment(
   now = new Date(),
 ): Promise<OwnerTotpEnrollment | null> {
   const authenticated = await getOwner();
-  if (!authenticated) return null;
+  if (!authenticated || !sessionHasFreshStepUp(authenticated.session, now)) return null;
   const rate = await consumeDistributedRateLimit(
     {
       key: `auth:mfa:enroll:${authenticated.session.id}`,
@@ -1565,7 +2105,8 @@ export async function beginOwnerTotpEnrollment(
 export async function verifyOwnerTotpEnrollment(code: string, now = new Date()): Promise<boolean> {
   const authenticated = await getOwner();
   const parsedCode = z.string().max(20).safeParse(code);
-  if (!authenticated || !parsedCode.success) return false;
+  if (!authenticated || !parsedCode.success || !sessionHasFreshStepUp(authenticated.session, now))
+    return false;
   const owner = authenticated.owner;
 
   const methods = await listMfaMethods(owner.id);
@@ -1641,7 +2182,8 @@ export async function configureOwnerEmailOtp(
 ): Promise<OwnerEmailOtpChallenge | null> {
   const authenticated = await getOwner();
   const parsed = enrollmentProviderSchema.safeParse(input);
-  if (!authenticated || !parsed.success) return null;
+  if (!authenticated || !parsed.success || !sessionHasFreshStepUp(authenticated.session, now))
+    return null;
   const owner = authenticated.owner;
 
   const methods = await listMfaMethods(owner.id);
@@ -1698,7 +2240,13 @@ export async function configureOwnerEmailOtp(
     },
   });
 
-  const delivery = await sendOwnerOtp({ code, now, providerId: provider.id });
+  const delivery = await sendOwnerOtp({
+    code,
+    now,
+    providerId: provider.id,
+    country: authenticated.session.country,
+    userAgent: authenticated.session.userAgent,
+  });
   if (!delivery.ok) {
     await consumeAuthChallenge(challengeId);
     await deleteSenderProvider(provider.id);
@@ -1739,7 +2287,8 @@ export async function verifyOwnerEmailOtpEnrollment(
       code: z.string().max(20),
     })
     .safeParse(input);
-  if (!authenticated || !parsed.success) return false;
+  if (!authenticated || !parsed.success || !sessionHasFreshStepUp(authenticated.session, now))
+    return false;
   const owner = authenticated.owner;
 
   const challenge = await findUsableAuthChallenge(parsed.data.challengeId, now, 5);
@@ -1834,7 +2383,12 @@ export async function revokeOtherOwnerSessions(
   now = new Date(),
 ): Promise<number> {
   const authenticated = await getOwner();
-  if (!authenticated || authenticated.session.id !== keepSessionId) return 0;
+  if (
+    !authenticated ||
+    authenticated.session.id !== keepSessionId ||
+    !sessionHasFreshStepUp(authenticated.session, now)
+  )
+    return 0;
   const revoked = await revokeOtherSessions(keepSessionId, now);
   await appendAuditEntry({
     action: "auth.sessions.revoked_others",
@@ -1848,7 +2402,7 @@ export async function revokeOtherOwnerSessions(
 
 export async function revokeAllOwnerSessions(now = new Date()): Promise<void> {
   const authenticated = await getOwner();
-  if (!authenticated) return;
+  if (!authenticated || !sessionHasFreshStepUp(authenticated.session, now)) return;
   await revokeAllSessions(now);
   await appendAuditEntry({
     action: "auth.sessions.revoked_all",

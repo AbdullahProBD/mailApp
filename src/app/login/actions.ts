@@ -9,6 +9,7 @@ import {
   completeEmailOtpLogin,
   completeLoginWithRecovery,
   completeTotpLogin,
+  resendLoginEmailOtp,
 } from "@/server/services/auth.service";
 import { setSessionTokenCookie } from "@/server/services/session.service";
 
@@ -29,7 +30,8 @@ async function sameOriginContext() {
   } catch {
     return null;
   }
-  return getRequestContext(requestHeaders);
+  const context = getRequestContext(requestHeaders);
+  return { ipHash: context.ipHash, userAgent: context.userAgent, country: context.country };
 }
 
 export async function loginPasswordAction(formData: FormData) {
@@ -46,6 +48,7 @@ export async function loginPasswordAction(formData: FormData) {
     password: parsed.data.password,
     ipHash: context.ipHash,
     userAgent: context.userAgent,
+    country: context.country,
   });
   return result.ok
     ? {
@@ -57,6 +60,21 @@ export async function loginPasswordAction(formData: FormData) {
     : result;
 }
 
+export async function resendLoginEmailOtpAction(input: unknown) {
+  const context = await sameOriginContext();
+  if (!context) return { ok: false as const, error: "invalid" as const };
+  const parsed = z.object({ ...challengeSchema.shape }).safeParse(input);
+  if (!parsed.success) return { ok: false as const, error: "invalid" as const };
+  return resendLoginEmailOtp({
+    ...parsed.data,
+    fingerprint: {
+      ipHash: context.ipHash,
+      userAgent: context.userAgent,
+      country: context.country,
+    },
+  });
+}
+
 export async function loginTotpAction(input: unknown) {
   const context = await sameOriginContext();
   if (!context) return { ok: false as const, error: "invalid" as const };
@@ -64,7 +82,7 @@ export async function loginTotpAction(input: unknown) {
   if (!parsed.success) return { ok: false as const, error: "invalid" as const };
   const result = await completeTotpLogin({
     ...parsed.data,
-    fingerprint: { ipHash: context.ipHash, userAgent: context.userAgent },
+    fingerprint: { ipHash: context.ipHash, userAgent: context.userAgent, country: context.country },
   });
   if (!result.ok) return result;
   await setSessionTokenCookie(result.token);
@@ -78,7 +96,7 @@ export async function loginEmailOtpAction(input: unknown) {
   if (!parsed.success) return { ok: false as const, error: "invalid" as const };
   const result = await completeEmailOtpLogin({
     ...parsed.data,
-    fingerprint: { ipHash: context.ipHash, userAgent: context.userAgent },
+    fingerprint: { ipHash: context.ipHash, userAgent: context.userAgent, country: context.country },
   });
   if (!result.ok) return result;
   await setSessionTokenCookie(result.token);
@@ -94,7 +112,7 @@ export async function loginRecoveryAction(input: unknown) {
   if (!parsed.success) return { ok: false as const, error: "invalid" as const };
   const result = await completeLoginWithRecovery({
     ...parsed.data,
-    fingerprint: { ipHash: context.ipHash, userAgent: context.userAgent },
+    fingerprint: { ipHash: context.ipHash, userAgent: context.userAgent, country: context.country },
   });
   if (!result.ok) return result;
   await setSessionTokenCookie(result.token);

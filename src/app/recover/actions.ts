@@ -17,8 +17,8 @@ async function requestContext() {
   } catch {
     return null;
   }
-  const { ipHash, userAgent } = getRequestContext(requestHeaders);
-  return { ipHash, userAgent };
+  const { ipHash, userAgent, country } = getRequestContext(requestHeaders);
+  return { ipHash, userAgent, country };
 }
 
 export async function beginPasswordResetAction(input: unknown) {

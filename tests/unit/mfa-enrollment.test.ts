@@ -22,6 +22,14 @@ vi.mock("@/server/services/otp-mailer.service", () => ({
   },
 }));
 
+vi.mock("@/server/services/password.service", () => ({
+  verifyPassword: (passwordHash: string, password: string) =>
+    Promise.resolve(
+      passwordHash === "$argon2id$test-password-hash-long-enough" &&
+        password === "correct-password",
+    ),
+}));
+
 import { decryptString, encryptString } from "@/lib/crypto";
 import { setDatabaseForTesting } from "@/lib/db/client";
 import {
@@ -41,6 +49,8 @@ import {
 } from "@/server/services/rate-limit.service";
 import { issueSession } from "@/server/services/session.service";
 import {
+  beginOwnerStepUp,
+  completeOwnerStepUp,
   beginOwnerTotpEnrollment,
   configureOwnerEmailOtp,
   verifyOwnerEmailOtpEnrollment,
@@ -60,6 +70,26 @@ let ownerId: string;
 let providerId: string;
 
 /** Creates the already-verified method the owner signed in with. */
+async function completeStepUp() {
+  const passwordChallenge = await beginOwnerStepUp("correct-password", new Date());
+  expect(passwordChallenge).not.toBeNull();
+  if (!passwordChallenge) return;
+
+  let code = sentCodes.at(-1) ?? "";
+  if (passwordChallenge.mfaType === "totp") {
+    code = new TOTP({
+      issuer: "Mail",
+      label: OWNER_EMAIL,
+      algorithm: "SHA1",
+      digits: 6,
+      period: 30,
+      secret: Secret.fromBase32(FIXED_TOTP_SECRET),
+    }).generate({ timestamp: Date.now() });
+  }
+
+  expect(await completeOwnerStepUp({ ...passwordChallenge, code }, new Date())).toBe(true);
+}
+
 async function addVerifiedMethod(type: "totp" | "email_otp") {
   const pending = await upsertMfaMethod({ ownerId, type, secretEncrypted: "pending" }, database.db);
   const encrypted = encryptString(type === "totp" ? FIXED_TOTP_SECRET : providerId, {
@@ -93,8 +123,8 @@ beforeEach(async () => {
   providerId = provider.id;
 
   const issued = await issueSession({
-    now: NOW,
-    mfaVerifiedAt: NOW,
+    now: new Date(),
+    mfaVerifiedAt: new Date(),
     context: { ipHash: IP_HASH, userAgent: "mfa-enrollment-test", country: null },
     db: database.db,
   });
@@ -110,8 +140,9 @@ afterEach(async () => {
 describe("settings MFA enrollment", () => {
   it("adds an authenticator without changing the existing preferred method", async () => {
     await addVerifiedMethod("email_otp");
+    await completeStepUp();
 
-    const setup = await beginOwnerTotpEnrollment(NOW);
+    const setup = await beginOwnerTotpEnrollment(new Date());
     expect(setup).not.toBeNull();
     if (!setup) return;
 
@@ -126,10 +157,10 @@ describe("settings MFA enrollment", () => {
       secret: Secret.fromBase32(setup.manualKey),
     }).generate({ timestamp: NOW.getTime() });
 
-    expect(await verifyOwnerTotpEnrollment(code, NOW)).toBe(true);
+    expect(await verifyOwnerTotpEnrollment(code, new Date())).toBe(true);
 
     const method = await getVerifiedMfaMethod(ownerId, "totp", database.db);
-    expect(method?.verifiedAt).toEqual(NOW);
+    expect(method?.verifiedAt).toBeInstanceOf(Date);
     // Enrolling a second factor must not silently move the radio button.
     expect(method?.preferred).toBe(false);
     expect(await getVerifiedMfaMethod(ownerId, "email_otp", database.db)).toMatchObject({
@@ -139,14 +170,16 @@ describe("settings MFA enrollment", () => {
 
   it("rejects a wrong authenticator code without activating the method", async () => {
     await addVerifiedMethod("email_otp");
-    expect(await beginOwnerTotpEnrollment(NOW)).not.toBeNull();
+    await completeStepUp();
+    expect(await beginOwnerTotpEnrollment(new Date())).not.toBeNull();
 
-    expect(await verifyOwnerTotpEnrollment("000000", NOW)).toBe(false);
+    expect(await verifyOwnerTotpEnrollment("000000", new Date())).toBe(false);
     expect(await getVerifiedMfaMethod(ownerId, "totp", database.db)).toBeNull();
   });
 
   it("verifies an emailed enrollment code and stores the provider reference encrypted", async () => {
     await addVerifiedMethod("totp");
+    await completeStepUp();
 
     const challenge = await configureOwnerEmailOtp(
       {
@@ -154,19 +187,21 @@ describe("settings MFA enrollment", () => {
         fromAddress: "new-codes@example.com",
         credentials: { apiKey: "new-api-key" },
       },
-      NOW,
+      new Date(),
     );
     expect(challenge).not.toBeNull();
     expect(sentCodes).toHaveLength(1);
     if (!challenge) return;
 
-    expect(await verifyOwnerEmailOtpEnrollment({ ...challenge, code: "000000" }, NOW)).toBe(false);
+    expect(await verifyOwnerEmailOtpEnrollment({ ...challenge, code: "000000" }, new Date())).toBe(
+      false,
+    );
     expect(
-      await verifyOwnerEmailOtpEnrollment({ ...challenge, code: sentCodes[0] ?? "" }, NOW),
+      await verifyOwnerEmailOtpEnrollment({ ...challenge, code: sentCodes[0] ?? "" }, new Date()),
     ).toBe(true);
 
     const method = await getVerifiedMfaMethod(ownerId, "email_otp", database.db);
-    expect(method?.verifiedAt).toEqual(NOW);
+    expect(method?.verifiedAt).toBeInstanceOf(Date);
     // The previously preferred authenticator stays selected.
     expect(method?.preferred).toBe(false);
     expect(await getVerifiedMfaMethod(ownerId, "totp", database.db)).toMatchObject({
@@ -185,24 +220,25 @@ describe("settings MFA enrollment", () => {
 
   it("refuses to start email enrollment twice and consumes the code once", async () => {
     await addVerifiedMethod("totp");
+    await completeStepUp();
 
     const input = {
       kind: "resend",
       fromAddress: "new-codes@example.com",
       credentials: { apiKey: "new-api-key" },
     } as const;
-    const challenge = await configureOwnerEmailOtp(input, NOW);
+    const challenge = await configureOwnerEmailOtp(input, new Date());
     expect(challenge).not.toBeNull();
     if (!challenge) return;
 
     expect(
-      await verifyOwnerEmailOtpEnrollment({ ...challenge, code: sentCodes[0] ?? "" }, NOW),
+      await verifyOwnerEmailOtpEnrollment({ ...challenge, code: sentCodes[0] ?? "" }, new Date()),
     ).toBe(true);
     // A verified method exists now, so a second configuration attempt is refused.
-    expect(await configureOwnerEmailOtp(input, NOW)).toBeNull();
+    expect(await configureOwnerEmailOtp(input, new Date())).toBeNull();
     // The challenge is single-use.
     expect(
-      await verifyOwnerEmailOtpEnrollment({ ...challenge, code: sentCodes[0] ?? "" }, NOW),
+      await verifyOwnerEmailOtpEnrollment({ ...challenge, code: sentCodes[0] ?? "" }, new Date()),
     ).toBe(false);
   });
 });

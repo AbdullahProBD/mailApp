@@ -8,6 +8,7 @@ import {
   completePasswordResetAction,
   verifyPasswordResetAction,
 } from "./actions";
+import { CodeInput } from "@/app/_components/code-input";
 
 type Challenge = { challengeId: string; challengeToken: string; mfaType: "totp" | "email_otp" };
 type Step = "email" | "verify" | "password";
@@ -32,6 +33,7 @@ export function RecoverForm() {
   } | null>(null);
   const [email, setEmail] = useState("");
   const [recovery, setRecovery] = useState(false);
+  const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -185,24 +187,30 @@ export function RecoverForm() {
             }}
             className="space-y-5"
           >
-            <label className="block text-sm font-medium">
-              {recovery
-                ? "Recovery code"
-                : challenge?.mfaType === "email_otp"
-                  ? "Email code"
-                  : "Authenticator code"}
-              <input
-                className={`${inputClass} ${recovery ? "font-mono" : "text-center font-mono text-xl tracking-[0.4em]"}`}
-                name={recovery ? "recoveryCode" : "code"}
-                type="text"
-                autoComplete={recovery ? "off" : "one-time-code"}
-                inputMode={recovery ? "text" : "numeric"}
-                {...(recovery
-                  ? { minLength: 10, maxLength: 32 }
-                  : { pattern: "[0-9]{6}", minLength: 6, maxLength: 6 })}
-                required
+            {recovery ? (
+              <label className="block text-sm font-medium">
+                Recovery code
+                <input
+                  className={`${inputClass} font-mono`}
+                  name="recoveryCode"
+                  type="text"
+                  autoComplete="off"
+                  inputMode="text"
+                  minLength={10}
+                  maxLength={32}
+                  required
+                />
+              </label>
+            ) : (
+              <CodeInput
+                id="recovery-code"
+                name="code"
+                label={challenge?.mfaType === "email_otp" ? "Email code" : "Authenticator code"}
+                value={code}
+                onChange={setCode}
+                inputClassName="min-h-12 w-full rounded-xl border border-stone-300 bg-white text-center font-mono text-xl text-stone-950 shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-stone-700 dark:bg-stone-950 dark:text-white"
               />
-            </label>
+            )}
             <button className={buttonClass} type="submit" disabled={busy}>
               {busy ? "Verifying…" : "Verify and continue"}
             </button>
@@ -212,6 +220,7 @@ export function RecoverForm() {
             type="button"
             onClick={() => {
               setRecovery((value) => !value);
+              setCode("");
               setError("");
             }}
           >

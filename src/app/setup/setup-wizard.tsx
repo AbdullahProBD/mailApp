@@ -20,6 +20,7 @@ import {
   senderCredentials,
   type SenderProviderKind,
 } from "@/app/_components/sender-provider-fields";
+import { CodeInput } from "@/app/_components/code-input";
 
 type Proof = { ownerId: string; challengeId: string; challengeToken: string };
 type Step =
@@ -57,6 +58,8 @@ export function SetupWizard({ ownerEmail }: { ownerEmail: string }) {
   const [password, setPassword] = useState("");
   const [secret, setSecret] = useState("");
   const [qrCode, setQrCode] = useState("");
+  const [emailCode, setEmailCode] = useState("");
+  const [totpCode, setTotpCode] = useState("");
   const [codes, setCodes] = useState<string[]>([]);
   const [providerKind, setProviderKind] = useState<ProviderKind>("resend");
   const [emailChallenge, setEmailChallenge] = useState<{
@@ -190,6 +193,7 @@ export function SetupWizard({ ownerEmail }: { ownerEmail: string }) {
         challengeToken: result.challengeToken,
         providerId: result.providerId,
       });
+      setEmailCode("");
       setEmailSentTo(ownerEmail);
       setStep("emailVerify");
     } catch {
@@ -213,6 +217,7 @@ export function SetupWizard({ ownerEmail }: { ownerEmail: string }) {
         return;
       }
       setEmailChallenge({ ...result });
+      setEmailCode("");
     } catch {
       setError("A new code could not be sent. Please try again.");
     } finally {
@@ -516,19 +521,14 @@ export function SetupWizard({ ownerEmail }: { ownerEmail: string }) {
             A six-digit code was sent to {emailSentTo || ownerEmail}. It expires in 10 minutes and
             can be used once.
           </p>
-          <label className="block text-sm font-medium">
-            Email code
-            <input
-              className={`${inputClass} text-center font-mono text-xl tracking-[0.4em]`}
-              name="code"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              pattern="[0-9]{6}"
-              minLength={6}
-              maxLength={6}
-              required
-            />
-          </label>
+          <CodeInput
+            id="setup-email-code"
+            name="code"
+            label="Email code"
+            value={emailCode}
+            onChange={setEmailCode}
+            inputClassName="min-h-12 w-full rounded-xl border border-stone-300 bg-white text-center font-mono text-xl text-stone-950 shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-stone-700 dark:bg-stone-950 dark:text-white"
+          />
           <div className="flex flex-wrap gap-3">
             <button className={buttonClass} type="submit" disabled={busy}>
               {busy ? "Verifying…" : "Verify email code"}
@@ -587,19 +587,14 @@ export function SetupWizard({ ownerEmail }: { ownerEmail: string }) {
             }}
             className="space-y-4"
           >
-            <label className="block text-sm font-medium">
-              6-digit authenticator code
-              <input
-                className={inputClass}
-                name="code"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                pattern="[0-9]{6}"
-                minLength={6}
-                maxLength={6}
-                required
-              />
-            </label>
+            <CodeInput
+              id="setup-totp-code"
+              name="code"
+              label="6-digit authenticator code"
+              value={totpCode}
+              onChange={setTotpCode}
+              inputClassName="min-h-12 w-full rounded-xl border border-stone-300 bg-white text-center font-mono text-xl text-stone-950 shadow-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-stone-700 dark:bg-stone-950 dark:text-white"
+            />
             <button className={buttonClass} type="submit" disabled={busy || !qrCode}>
               {busy ? "Verifying…" : "Verify authenticator"}
             </button>

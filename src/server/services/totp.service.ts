@@ -10,8 +10,8 @@ import { generateNumericCode } from "@/lib/crypto/tokens";
 /**
  * TOTP (RFC 6238) with a 30-second step and one step of accepted drift.
  *
- * Only the current and previous step are accepted, and the accepted step is
- * recorded by the caller so a code cannot be replayed within its window.
+ * The previous, current, and next step are accepted for symmetric one-step
+ * clock drift; callers record the matched step so no accepted code can replay.
  */
 const TOTP_STEP_SECONDS = 30;
 const TOTP_DIGITS = 6;
@@ -78,7 +78,7 @@ export function verifyTotpCode(
   const totp = createTotp(secret, ownerEmail);
   const currentStep = Math.floor(now.getTime() / 1000 / TOTP_STEP_SECONDS);
 
-  for (const candidateStep of [currentStep, currentStep - 1]) {
+  for (const candidateStep of [currentStep - 1, currentStep, currentStep + 1]) {
     const offset = candidateStep - currentStep;
     const expected = totp.generate({
       timestamp: now.getTime() + offset * TOTP_STEP_SECONDS * 1000,

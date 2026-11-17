@@ -65,6 +65,7 @@ export default async function SettingsPage() {
               preferred: method.preferred,
             }))}
             missing={missing}
+            nonCriticalSecurityEmails={authenticated.owner.nonCriticalSecurityEmails}
           />
         </div>
       </div>

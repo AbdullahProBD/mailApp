@@ -16,6 +16,7 @@ export interface OwnerProfile {
   passwordHash: string | null;
   setupCompletedAt: Date | null;
   setupRecoveryConfirmedAt: Date | null;
+  nonCriticalSecurityEmails: boolean;
   timezone: string;
   locale: string;
   theme: string;
@@ -32,6 +33,7 @@ const profileUpdateSchema = z
     timezone: z.string().min(1).max(64).optional(),
     locale: z.string().min(2).max(35).optional(),
     theme: z.enum(["light", "dark", "system"]).optional(),
+    nonCriticalSecurityEmails: z.boolean().optional(),
     passwordHash: z.string().min(16).max(512).optional(),
   })
   .strict();
@@ -45,6 +47,7 @@ function toOwnerProfile(row: typeof ownerProfile.$inferSelect): OwnerProfile {
     passwordHash: row.passwordHash ?? null,
     setupCompletedAt: row.setupCompletedAt ?? null,
     setupRecoveryConfirmedAt: row.setupRecoveryConfirmedAt ?? null,
+    nonCriticalSecurityEmails: row.nonCriticalSecurityEmails,
     timezone: row.timezone,
     locale: row.locale,
     theme: row.theme,
@@ -113,6 +116,17 @@ export async function updateOwnerProfile(
     throw new Error("Owner profile not found");
   }
   return toOwnerProfile(row);
+}
+
+export async function setOwnerNonCriticalSecurityEmails(
+  ownerId: string,
+  enabled: boolean,
+  db: DbExecutor = getDb(),
+): Promise<void> {
+  await db
+    .update(ownerProfile)
+    .set({ nonCriticalSecurityEmails: enabled })
+    .where(eq(ownerProfile.id, ownerId));
 }
 
 /** Marks the first-run wizard complete; setup routes return 404 afterwards. */

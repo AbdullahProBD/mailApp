@@ -1,10 +1,10 @@
 import "server-only";
 
-import { and, eq, isNotNull, isNull, lt, or } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, lt, or, ne } from "drizzle-orm";
 import { z } from "zod";
 
 import { getDb, type DbExecutor } from "@/lib/db/client";
-import { mfaMethods } from "@/lib/db/schema";
+import { mfaMethods, ownerProfile } from "@/lib/db/schema";
 
 export const MFA_TYPES = ["email_otp", "totp"] as const;
 export type MfaType = (typeof MFA_TYPES)[number];
@@ -178,6 +178,74 @@ export async function verifyMfaMethod(
     return db.transaction((tx) => markPreferred(tx));
   }
   return markPreferred(db);
+}
+
+/** Deletes a verified method, atomically refusing to remove the final verified factor. */
+export async function removeVerifiedMfaMethod(
+  ownerId: string,
+  type: MfaType,
+  db: DbExecutor = getDb(),
+): Promise<boolean> {
+  const run = async (executor: DbExecutor): Promise<boolean> => {
+    // Serialize method removals per owner so parallel requests cannot each
+    // observe the other's factor and remove the final verified method.
+    await executor
+      .select({ id: ownerProfile.id })
+      .from(ownerProfile)
+      .where(eq(ownerProfile.id, ownerId))
+      .for("update");
+    const remaining = await executor
+      .select({ id: mfaMethods.id })
+      .from(mfaMethods)
+      .where(
+        and(
+          eq(mfaMethods.ownerId, ownerId),
+          isNotNull(mfaMethods.verifiedAt),
+          ne(mfaMethods.type, type),
+        ),
+      )
+      .limit(1);
+    if (!remaining[0]) return false;
+    const deleted = await executor
+      .delete(mfaMethods)
+      .where(
+        and(
+          eq(mfaMethods.ownerId, ownerId),
+          eq(mfaMethods.type, type),
+          isNotNull(mfaMethods.verifiedAt),
+        ),
+      )
+      .returning({ id: mfaMethods.id });
+    if (deleted.length !== 1) return false;
+
+    const preferred = await executor
+      .select({ id: mfaMethods.id })
+      .from(mfaMethods)
+      .where(
+        and(
+          eq(mfaMethods.ownerId, ownerId),
+          isNotNull(mfaMethods.verifiedAt),
+          eq(mfaMethods.preferred, true),
+        ),
+      )
+      .limit(1);
+    if (!preferred[0]) {
+      const replacement = await executor
+        .select({ id: mfaMethods.id })
+        .from(mfaMethods)
+        .where(and(eq(mfaMethods.ownerId, ownerId), isNotNull(mfaMethods.verifiedAt)))
+        .limit(1);
+      if (replacement[0]) {
+        await executor
+          .update(mfaMethods)
+          .set({ preferred: true })
+          .where(eq(mfaMethods.id, replacement[0].id));
+      }
+    }
+    return true;
+  };
+  if (db === getDb()) return db.transaction((tx) => run(tx));
+  return run(db);
 }
 
 /** Atomically advances the TOTP watermark; equal or older steps cannot replay. */
