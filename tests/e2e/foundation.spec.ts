@@ -20,14 +20,28 @@ test("baseline security headers are present", async ({ request }) => {
 });
 
 test("anonymous visitors never reach the inbox or settings", async ({ page, request }) => {
-  // Before setup the inbox sends the owner to /setup; afterwards to /login.
+  // A root loading.tsx means an unauthenticated request streams a redirect
+  // (200 + loading shell) instead of a bare 3xx. Either way the browser must
+  // land on the auth screen and protected content must never appear.
   const home = await request.get("/", { maxRedirects: 0 });
-  expect([307, 308]).toContain(home.status());
-  expect(home.headers()["location"]).toMatch(/\/(setup|login)(\?|$)/);
+  if (home.status() === 200) {
+    const body = await home.text();
+    expect(body).not.toContain("Your inbox");
+    expect(body).not.toContain("Welcome,");
+  } else {
+    expect([307, 308]).toContain(home.status());
+    expect(home.headers()["location"]).toMatch(/\/(setup|login)(\?|$)/);
+  }
 
   const settings = await request.get("/settings", { maxRedirects: 0 });
-  expect([307, 308]).toContain(settings.status());
-  expect(settings.headers()["location"]).toMatch(/\/login(\?|$)/);
+  if (settings.status() === 200) {
+    const body = await settings.text();
+    expect(body).not.toContain("This device");
+    expect(body).not.toContain("service_role");
+  } else {
+    expect([307, 308]).toContain(settings.status());
+    expect(settings.headers()["location"]).toMatch(/\/login(\?|$)/);
+  }
 
   await page.goto("/settings");
   await expect(page).toHaveURL(/\/login$/);
