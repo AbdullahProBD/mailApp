@@ -49,6 +49,21 @@ export const serverEnvSchema = z.object({
     .string()
     .min(16, "UPSTASH_REDIS_REST_TOKEN must be at least 16 characters"),
   APP_URL: z.url("APP_URL must be a valid URL"),
+  TRUSTED_PROXY_HEADERS: z.enum(["true", "false"]).default("false"),
+  AUTH_SESSION_IDLE_MINUTES: z.coerce
+    .number()
+    .int()
+    .min(5, "AUTH_SESSION_IDLE_MINUTES must be at least 5")
+    .max(720, "AUTH_SESSION_IDLE_MINUTES must be at most 720")
+    .default(30),
+  AUTH_SESSION_ABSOLUTE_HOURS: z.coerce
+    .number()
+    .int()
+    .min(1, "AUTH_SESSION_ABSOLUTE_HOURS must be at least 1")
+    .max(168, "AUTH_SESSION_ABSOLUTE_HOURS must be at most 168")
+    .default(12),
+  /** Have I Been Pwned range API base. Overridable so tests never hit the network. */
+  HIBP_API_URL: z.url("HIBP_API_URL must be a valid URL").default("https://api.pwnedpasswords.com"),
   SENTRY_DSN: z.url("SENTRY_DSN must be a valid URL").optional(),
   GOOGLE_CLIENT_ID: z.string().min(1).optional(),
   GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
@@ -103,5 +118,9 @@ export function parseEncryptionKeys(value: string): ReadonlyArray<{
 function assertProductionSafety(env: ServerEnv): void {
   if (new URL(env.APP_URL).protocol !== "https:") {
     throw new Error("APP_URL must use HTTPS in production");
+  }
+
+  if (env.TRUSTED_PROXY_HEADERS !== "true") {
+    throw new Error("TRUSTED_PROXY_HEADERS must be true in production");
   }
 }

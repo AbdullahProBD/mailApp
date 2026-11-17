@@ -70,6 +70,7 @@ jobs:
           UPSTASH_REDIS_REST_URL: https://ci.upstash.invalid
           UPSTASH_REDIS_REST_TOKEN: ci-only-not-a-production-secret
           APP_URL: https://ci.example.invalid
+          TRUSTED_PROXY_HEADERS: "true"
 
       - name: Dependency audit
         run: pnpm audit --audit-level high

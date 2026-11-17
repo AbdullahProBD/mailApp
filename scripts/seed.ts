@@ -54,7 +54,8 @@ function log(message: string): void {
  */
 export async function seed(db: Database, ownerEmail: string): Promise<void> {
   const owner = await claimOwnerProfile({ email: ownerEmail }, db);
-  const completed = await completeOwnerSetup(owner.id, db);
+  // Re-seeding is a no-op for an installation whose wizard already finished.
+  const completed = owner.setupCompletedAt ? owner : await completeOwnerSetup(owner.id, db);
   log(`owner ready: ${completed.email}`);
 
   const accounts = await listMailAccounts(db);

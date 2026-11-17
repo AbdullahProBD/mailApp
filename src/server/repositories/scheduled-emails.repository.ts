@@ -3,7 +3,7 @@ import "server-only";
 import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { getDb, type Database } from "@/lib/db/client";
+import { getDb, type DbExecutor } from "@/lib/db/client";
 import { scheduledEmails } from "@/lib/db/schema";
 
 export const SCHEDULED_EMAIL_STATES = [
@@ -66,7 +66,7 @@ function toScheduledEmail(row: typeof scheduledEmails.$inferSelect): ScheduledEm
  */
 export async function enqueueScheduledEmail(
   input: EnqueueScheduledEmailInput,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<ScheduledEmail> {
   const email = enqueueSchema.parse(input);
 
@@ -103,7 +103,7 @@ export async function enqueueScheduledEmail(
 
 export async function listScheduledEmails(
   accountId: string,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<ScheduledEmail[]> {
   const rows = await db
     .select()
@@ -124,7 +124,7 @@ export async function claimDueScheduledEmails(
   limit = 10,
   now: Date = new Date(),
   leaseSeconds = 120,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<ScheduledEmail[]> {
   const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
   const leaseExpiresAt = new Date(now.getTime() + leaseSeconds * 1000);
@@ -161,7 +161,7 @@ export async function claimDueScheduledEmails(
 /** Reclaims rows whose worker died before finishing (lease expired). */
 export async function reclaimExpiredLeases(
   now: Date = new Date(),
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<number> {
   const rows = await db
     .update(scheduledEmails)
@@ -174,7 +174,7 @@ export async function reclaimExpiredLeases(
 export async function markScheduledEmailSent(
   emailId: string,
   now: Date = new Date(),
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<void> {
   await db
     .update(scheduledEmails)
@@ -191,7 +191,7 @@ export async function markScheduledEmailFailed(
   errorMessage: string,
   maxAttempts = 5,
   now: Date = new Date(),
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<{ state: ScheduledEmailState; nextAttemptAt: Date | null }> {
   const rows = await db
     .select({ attempts: scheduledEmails.attempts })
@@ -219,7 +219,7 @@ export async function markScheduledEmailFailed(
 
 export async function cancelScheduledEmail(
   emailId: string,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<boolean> {
   const rows = await db
     .update(scheduledEmails)

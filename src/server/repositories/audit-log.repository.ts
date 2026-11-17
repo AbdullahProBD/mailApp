@@ -3,7 +3,7 @@ import "server-only";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 
-import { getDb, type Database } from "@/lib/db/client";
+import { getDb, type DbExecutor } from "@/lib/db/client";
 import { auditLog } from "@/lib/db/schema";
 
 const auditEntrySchema = z.object({
@@ -34,7 +34,7 @@ export type AuditEntry = z.infer<typeof auditEntrySchema> & {
  */
 export async function appendAuditEntry(
   input: AuditEntryInput,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<void> {
   const entry = auditEntrySchema.parse(input);
 
@@ -50,7 +50,10 @@ export async function appendAuditEntry(
 }
 
 /** Most recent entries first. Never logs message content or secrets. */
-export async function listAuditEntries(limit = 100, db: Database = getDb()): Promise<AuditEntry[]> {
+export async function listAuditEntries(
+  limit = 100,
+  db: DbExecutor = getDb(),
+): Promise<AuditEntry[]> {
   const safeLimit = Math.min(Math.max(limit, 1), 500);
 
   const rows = await db.select().from(auditLog).orderBy(desc(auditLog.createdAt)).limit(safeLimit);
@@ -70,7 +73,7 @@ export async function listAuditEntries(limit = 100, db: Database = getDb()): Pro
 
 export async function countAuditEntriesByAction(
   action: string,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<number> {
   const rows = await db
     .select({ id: auditLog.id })

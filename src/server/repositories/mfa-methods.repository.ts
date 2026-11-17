@@ -1,9 +1,9 @@
 import "server-only";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, lt, or } from "drizzle-orm";
 import { z } from "zod";
 
-import { getDb, type Database } from "@/lib/db/client";
+import { getDb, type DbExecutor } from "@/lib/db/client";
 import { mfaMethods } from "@/lib/db/schema";
 
 export const MFA_TYPES = ["email_otp", "totp"] as const;
@@ -22,6 +22,7 @@ export interface MfaMethod {
 }
 
 const upsertSchema = z.object({
+  id: z.uuid().optional(),
   ownerId: z.uuid(),
   type: z.enum(MFA_TYPES),
   secretEncrypted: z.string().min(1).optional(),
@@ -51,13 +52,14 @@ function toMfaMethod(row: typeof mfaMethods.$inferSelect): MfaMethod {
  */
 export async function upsertMfaMethod(
   input: UpsertMfaMethodInput,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<MfaMethod> {
   const method = upsertSchema.parse(input);
 
   const rows = await db
     .insert(mfaMethods)
     .values({
+      ...(method.id ? { id: method.id } : {}),
       ownerId: method.ownerId,
       type: method.type,
       secretEncrypted: method.secretEncrypted ?? null,
@@ -68,6 +70,7 @@ export async function upsertMfaMethod(
         secretEncrypted: method.secretEncrypted ?? null,
         verifiedAt: null,
         preferred: false,
+        lastUsedStep: null,
       },
     })
     .returning();
@@ -81,7 +84,7 @@ export async function upsertMfaMethod(
 
 export async function listMfaMethods(
   ownerId: string,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<MfaMethod[]> {
   const rows = await db
     .select()
@@ -94,7 +97,7 @@ export async function listMfaMethods(
 export async function getVerifiedMfaMethod(
   ownerId: string,
   type: MfaType,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<MfaMethod | null> {
   const rows = await db
     .select()
@@ -103,7 +106,7 @@ export async function getVerifiedMfaMethod(
       and(
         eq(mfaMethods.ownerId, ownerId),
         eq(mfaMethods.type, type),
-        eq(mfaMethods.preferred, true),
+        isNotNull(mfaMethods.verifiedAt),
       ),
     )
     .limit(1);
@@ -112,17 +115,53 @@ export async function getVerifiedMfaMethod(
   return row && row.verifiedAt ? toMfaMethod(row) : null;
 }
 
+/** Selects a verified owner method for future second-factor challenges. */
+export async function setPreferredMfaMethod(
+  ownerId: string,
+  type: MfaType,
+  db: DbExecutor = getDb(),
+): Promise<boolean> {
+  const run = async (executor: DbExecutor) => {
+    const method = await executor
+      .select({ id: mfaMethods.id })
+      .from(mfaMethods)
+      .where(
+        and(
+          eq(mfaMethods.ownerId, ownerId),
+          eq(mfaMethods.type, type),
+          isNotNull(mfaMethods.verifiedAt),
+        ),
+      )
+      .limit(1);
+    if (!method[0]) return false;
+    await executor
+      .update(mfaMethods)
+      .set({ preferred: false })
+      .where(eq(mfaMethods.ownerId, ownerId));
+    await executor
+      .update(mfaMethods)
+      .set({ preferred: true })
+      .where(and(eq(mfaMethods.ownerId, ownerId), eq(mfaMethods.type, type)));
+    return true;
+  };
+  if (db === getDb()) return db.transaction((tx) => run(tx));
+  return run(db);
+}
+
 /** Marks a method verified and makes it the preferred method. */
 export async function verifyMfaMethod(
   ownerId: string,
   type: MfaType,
   now: Date = new Date(),
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<MfaMethod> {
-  return db.transaction(async (tx) => {
-    await tx.update(mfaMethods).set({ preferred: false }).where(eq(mfaMethods.ownerId, ownerId));
+  const markPreferred = async (executor: DbExecutor): Promise<MfaMethod> => {
+    await executor
+      .update(mfaMethods)
+      .set({ preferred: false })
+      .where(eq(mfaMethods.ownerId, ownerId));
 
-    const rows = await tx
+    const rows = await executor
       .update(mfaMethods)
       .set({ verifiedAt: now, preferred: true })
       .where(and(eq(mfaMethods.ownerId, ownerId), eq(mfaMethods.type, type)))
@@ -133,21 +172,31 @@ export async function verifyMfaMethod(
       throw new Error("MFA method not found");
     }
     return toMfaMethod(row);
-  });
+  };
+
+  if (db === getDb()) {
+    return db.transaction((tx) => markPreferred(tx));
+  }
+  return markPreferred(db);
 }
 
-/**
- * Records the TOTP step that was accepted, so the same code cannot be replayed
- * inside its validity window.
- */
+/** Atomically advances the TOTP watermark; equal or older steps cannot replay. */
 export async function recordMfaStep(
   ownerId: string,
   type: MfaType,
   step: number,
-  db: Database = getDb(),
-): Promise<void> {
-  await db
+  db: DbExecutor = getDb(),
+): Promise<boolean> {
+  const rows = await db
     .update(mfaMethods)
     .set({ lastUsedStep: step })
-    .where(and(eq(mfaMethods.ownerId, ownerId), eq(mfaMethods.type, type)));
+    .where(
+      and(
+        eq(mfaMethods.ownerId, ownerId),
+        eq(mfaMethods.type, type),
+        or(isNull(mfaMethods.lastUsedStep), lt(mfaMethods.lastUsedStep, step)),
+      ),
+    )
+    .returning({ id: mfaMethods.id });
+  return rows.length === 1;
 }

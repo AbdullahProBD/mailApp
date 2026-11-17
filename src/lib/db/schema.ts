@@ -37,6 +37,7 @@ export const ownerProfile = pgTable(
     email: text("email").notNull(),
     passwordHash: text("password_hash"),
     setupCompletedAt: timestamp("setup_completed_at", { withTimezone: true }),
+    setupRecoveryConfirmedAt: timestamp("setup_recovery_confirmed_at", { withTimezone: true }),
     timezone: text("timezone").notNull().default("UTC"),
     locale: text("locale").notNull().default("en"),
     theme: text("theme").notNull().default("system"),
@@ -72,6 +73,7 @@ export const mailSenderProviders = pgTable("mail_sender_providers", {
   fromAddress: text("from_address").notNull(),
   fromName: text("from_name"),
   isDefault: boolean("is_default").notNull().default(false),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
   ...timestamps,
 });
 
@@ -100,8 +102,10 @@ export const sessions = pgTable(
     absoluteExpiresAt: timestamp("absolute_expires_at", { withTimezone: true }).notNull(),
     ipHash: text("ip_hash"),
     userAgent: text("user_agent"),
+    country: text("country"),
     mfaVerifiedAt: timestamp("mfa_verified_at", { withTimezone: true }),
     rememberDevice: boolean("remember_device").notNull().default(false),
+    tokenRotatedAt: timestamp("token_rotated_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -116,6 +120,7 @@ export const authChallenges = pgTable("auth_challenges", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   consumedAt: timestamp("consumed_at", { withTimezone: true }),
   browserBindingHash: text("browser_binding_hash"),
+  data: jsonb("data").notNull().default({}),
   ...timestamps,
 });
 

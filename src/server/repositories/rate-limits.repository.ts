@@ -3,7 +3,7 @@ import "server-only";
 import { and, eq, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { getDb, type Database } from "@/lib/db/client";
+import { getDb, type DbExecutor } from "@/lib/db/client";
 import { rateLimits } from "@/lib/db/schema";
 
 /**
@@ -29,10 +29,15 @@ export type ConsumeRateLimitInput = z.input<typeof consumeSchema>;
 export async function consumeRateLimit(
   input: ConsumeRateLimitInput,
   now: Date = new Date(),
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<RateLimitResult> {
   const { key, limit, windowSeconds } = consumeSchema.parse(input);
   const windowEnd = new Date(now.getTime() + windowSeconds * 1000);
+  // Dates are passed as ISO strings with an explicit cast: the raw `sql`
+  // template does not apply the column's date encoder, and the driver refuses
+  // a Date instance as a bind parameter.
+  const nowParam = sql`${now.toISOString()}::timestamptz`;
+  const windowEndParam = sql`${windowEnd.toISOString()}::timestamptz`;
 
   const rows = await db
     .insert(rateLimits)
@@ -40,9 +45,9 @@ export async function consumeRateLimit(
     .onConflictDoUpdate({
       target: rateLimits.key,
       set: {
-        count: sql`case when ${rateLimits.expiresAt} <= ${now} then 1 else ${rateLimits.count} + 1 end`,
-        windowStart: sql`case when ${rateLimits.expiresAt} <= ${now} then ${now} else ${rateLimits.windowStart} end`,
-        expiresAt: sql`case when ${rateLimits.expiresAt} <= ${now} then ${windowEnd} else ${rateLimits.expiresAt} end`,
+        count: sql`case when ${rateLimits.expiresAt} <= ${nowParam} then 1 else ${rateLimits.count} + 1 end`,
+        windowStart: sql`case when ${rateLimits.expiresAt} <= ${nowParam} then ${nowParam} else ${rateLimits.windowStart} end`,
+        expiresAt: sql`case when ${rateLimits.expiresAt} <= ${nowParam} then ${windowEndParam} else ${rateLimits.expiresAt} end`,
       },
     })
     .returning({ count: rateLimits.count, expiresAt: rateLimits.expiresAt });
@@ -65,14 +70,15 @@ export async function peekRateLimit(
   key: string,
   limit: number,
   now: Date = new Date(),
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<RateLimitResult> {
   const parsed = consumeSchema.pick({ key: true, limit: true }).parse({ key, limit });
+  const nowParam = sql`${now.toISOString()}::timestamptz`;
 
   const rows = await db
     .select({ count: rateLimits.count, expiresAt: rateLimits.expiresAt })
     .from(rateLimits)
-    .where(and(eq(rateLimits.key, parsed.key), sql`${rateLimits.expiresAt} > ${now}`))
+    .where(and(eq(rateLimits.key, parsed.key), sql`${rateLimits.expiresAt} > ${nowParam}`))
     .limit(1);
 
   const row = rows[0];
@@ -86,14 +92,14 @@ export async function peekRateLimit(
 }
 
 /** Clears a key, e.g. after a successful login. */
-export async function resetRateLimit(key: string, db: Database = getDb()): Promise<void> {
+export async function resetRateLimit(key: string, db: DbExecutor = getDb()): Promise<void> {
   await db.delete(rateLimits).where(eq(rateLimits.key, key));
 }
 
 /** Removes expired windows; scheduled cleanup calls this. */
 export async function deleteExpiredRateLimits(
   now: Date = new Date(),
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<number> {
   const rows = await db
     .delete(rateLimits)

@@ -1,9 +1,9 @@
 import "server-only";
 
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 
-import { getDb, type Database } from "@/lib/db/client";
+import { getDb, type DbExecutor } from "@/lib/db/client";
 import { ownerProfile } from "@/lib/db/schema";
 
 /**
@@ -15,6 +15,7 @@ export interface OwnerProfile {
   email: string;
   passwordHash: string | null;
   setupCompletedAt: Date | null;
+  setupRecoveryConfirmedAt: Date | null;
   timezone: string;
   locale: string;
   theme: string;
@@ -43,6 +44,7 @@ function toOwnerProfile(row: typeof ownerProfile.$inferSelect): OwnerProfile {
     email: row.email,
     passwordHash: row.passwordHash ?? null,
     setupCompletedAt: row.setupCompletedAt ?? null,
+    setupRecoveryConfirmedAt: row.setupRecoveryConfirmedAt ?? null,
     timezone: row.timezone,
     locale: row.locale,
     theme: row.theme,
@@ -52,14 +54,14 @@ function toOwnerProfile(row: typeof ownerProfile.$inferSelect): OwnerProfile {
 }
 
 /** Returns the owner row, or `null` while the installation is unclaimed. */
-export async function getOwnerProfile(db: Database = getDb()): Promise<OwnerProfile | null> {
+export async function getOwnerProfile(db: DbExecutor = getDb()): Promise<OwnerProfile | null> {
   const rows = await db.select().from(ownerProfile).limit(1);
   const row = rows[0];
   return row ? toOwnerProfile(row) : null;
 }
 
 /** Returns the owner row or throws, for routes that cannot proceed without it. */
-export async function requireOwnerProfile(db: Database = getDb()): Promise<OwnerProfile> {
+export async function requireOwnerProfile(db: DbExecutor = getDb()): Promise<OwnerProfile> {
   const owner = await getOwnerProfile(db);
   if (!owner) {
     throw new Error("Owner profile has not been created yet");
@@ -75,7 +77,7 @@ export async function requireOwnerProfile(db: Database = getDb()): Promise<Owner
  */
 export async function claimOwnerProfile(
   input: z.input<typeof claimSchema>,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<OwnerProfile> {
   const { email } = claimSchema.parse(input);
 
@@ -92,7 +94,7 @@ export async function claimOwnerProfile(
 export async function updateOwnerProfile(
   ownerId: string,
   input: OwnerProfileUpdate,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<OwnerProfile> {
   const patch = profileUpdateSchema.parse(input);
 
@@ -114,14 +116,31 @@ export async function updateOwnerProfile(
 }
 
 /** Marks the first-run wizard complete; setup routes return 404 afterwards. */
+export async function setOwnerPasswordHash(
+  ownerId: string,
+  passwordHash: string,
+  db: DbExecutor = getDb(),
+): Promise<void> {
+  const parsedHash = z.string().min(16).max(512).parse(passwordHash);
+  const rows = await db
+    .update(ownerProfile)
+    .set({ passwordHash: parsedHash })
+    .where(and(eq(ownerProfile.id, ownerId), isNull(ownerProfile.setupCompletedAt)))
+    .returning({ id: ownerProfile.id });
+  if (rows.length !== 1) {
+    throw new Error("Owner profile not found");
+  }
+}
+
 export async function completeOwnerSetup(
   ownerId: string,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
+  now: Date = new Date(),
 ): Promise<OwnerProfile> {
   const rows = await db
     .update(ownerProfile)
-    .set({ setupCompletedAt: new Date() })
-    .where(eq(ownerProfile.id, ownerId))
+    .set({ setupCompletedAt: now })
+    .where(and(eq(ownerProfile.id, ownerId), isNull(ownerProfile.setupCompletedAt)))
     .returning();
 
   const row = rows[0];
@@ -129,4 +148,26 @@ export async function completeOwnerSetup(
     throw new Error("Owner profile not found");
   }
   return toOwnerProfile(row);
+}
+
+export async function confirmSetupRecoveryCodes(
+  ownerId: string,
+  now: Date = new Date(),
+  db: DbExecutor = getDb(),
+): Promise<void> {
+  await db
+    .update(ownerProfile)
+    .set({ setupRecoveryConfirmedAt: now })
+    .where(and(eq(ownerProfile.id, ownerId), isNull(ownerProfile.setupCompletedAt)));
+}
+
+/** Invalidates an earlier save acknowledgement whenever a new code batch is issued. */
+export async function clearSetupRecoveryConfirmation(
+  ownerId: string,
+  db: DbExecutor = getDb(),
+): Promise<void> {
+  await db
+    .update(ownerProfile)
+    .set({ setupRecoveryConfirmedAt: null })
+    .where(and(eq(ownerProfile.id, ownerId), isNull(ownerProfile.setupCompletedAt)));
 }

@@ -3,7 +3,7 @@ import "server-only";
 import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 
-import { getDb, type Database } from "@/lib/db/client";
+import { getDb, withTransaction, type DbExecutor } from "@/lib/db/client";
 import { recoveryCodes } from "@/lib/db/schema";
 
 /**
@@ -23,11 +23,11 @@ export type InsertRecoveryCodesInput = z.input<typeof insertCodesSchema>;
 /** Replaces all unused codes for the owner with a fresh batch. */
 export async function replaceRecoveryCodes(
   input: InsertRecoveryCodesInput,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<number> {
   const { ownerId, codeHmacs } = insertCodesSchema.parse(input);
 
-  return db.transaction(async (tx) => {
+  return withTransaction(db, async (tx) => {
     await tx.delete(recoveryCodes).where(eq(recoveryCodes.ownerId, ownerId));
     const rows = await tx
       .insert(recoveryCodes)
@@ -40,7 +40,7 @@ export async function replaceRecoveryCodes(
 /** Returns the unused code row matching the digest, or `null`. */
 export async function findUnusedRecoveryCode(
   codeHmac: string,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<{ id: string } | null> {
   const rows = await db
     .select({ id: recoveryCodes.id })
@@ -58,7 +58,7 @@ export async function findUnusedRecoveryCode(
 export async function consumeRecoveryCode(
   codeId: string,
   now: Date = new Date(),
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<boolean> {
   const rows = await db
     .update(recoveryCodes)
@@ -71,7 +71,7 @@ export async function consumeRecoveryCode(
 
 export async function countUnusedRecoveryCodes(
   ownerId: string,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<number> {
   const rows = await db
     .select({ id: recoveryCodes.id })

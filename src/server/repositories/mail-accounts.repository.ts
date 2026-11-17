@@ -6,7 +6,7 @@ import { asc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { decryptString, encryptString } from "@/lib/crypto";
-import { getDb, type Database } from "@/lib/db/client";
+import { getDb, type DbExecutor } from "@/lib/db/client";
 import { mailAccounts } from "@/lib/db/schema";
 
 export const MAIL_PROVIDER_TYPES = ["gmail", "microsoft", "imap"] as const;
@@ -88,7 +88,7 @@ function toMailAccount(
  */
 export async function createMailAccount(
   input: CreateMailAccountInput,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<MailAccount> {
   const account = createAccountSchema.parse(input);
   const id = randomUUID();
@@ -128,7 +128,7 @@ export async function createMailAccount(
   });
 }
 
-export async function listMailAccounts(db: Database = getDb()): Promise<MailAccount[]> {
+export async function listMailAccounts(db: DbExecutor = getDb()): Promise<MailAccount[]> {
   const rows = await db.select().from(mailAccounts).orderBy(asc(mailAccounts.sortOrder));
   return rows.map((row) =>
     toMailAccount(row, {
@@ -146,7 +146,7 @@ export async function listMailAccounts(db: Database = getDb()): Promise<MailAcco
  */
 export async function getMailAccountCredentials(
   accountId: string,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<{
   credentials: Record<string, unknown> | null;
   oauthTokens: Record<string, unknown> | null;
@@ -173,7 +173,7 @@ const statusPatchSchema = z.enum(MAIL_ACCOUNT_STATUSES);
 export async function setMailAccountStatus(
   accountId: string,
   status: z.input<typeof statusPatchSchema>,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<void> {
   await db
     .update(mailAccounts)
@@ -184,7 +184,7 @@ export async function setMailAccountStatus(
 export async function recordMailAccountSync(
   accountId: string,
   syncedAt: Date = new Date(),
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<void> {
   await db
     .update(mailAccounts)
@@ -193,12 +193,15 @@ export async function recordMailAccountSync(
 }
 
 /** Deletes the account; cached folders, threads and messages cascade away. */
-export async function deleteMailAccount(accountId: string, db: Database = getDb()): Promise<void> {
+export async function deleteMailAccount(
+  accountId: string,
+  db: DbExecutor = getDb(),
+): Promise<void> {
   await db.delete(mailAccounts).where(eq(mailAccounts.id, accountId));
 }
 
 /** Ensures exactly one account is the default sender. */
-export async function setDefaultSender(accountId: string, db: Database = getDb()): Promise<void> {
+export async function setDefaultSender(accountId: string, db: DbExecutor = getDb()): Promise<void> {
   await db.transaction(async (tx) => {
     await tx.update(mailAccounts).set({ isDefaultSender: false });
     await tx
@@ -211,7 +214,7 @@ export async function setDefaultSender(accountId: string, db: Database = getDb()
 /** Re-numbers accounts in the given order (drag-and-drop). */
 export async function reorderMailAccounts(
   orderedIds: readonly string[],
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<void> {
   const ids = z.array(z.uuid()).min(1).max(100).parse(orderedIds);
 
@@ -223,7 +226,7 @@ export async function reorderMailAccounts(
 }
 
 /** Safe incremental counter used by sync bookkeeping. */
-export async function bumpSyncRevision(accountId: string, db: Database = getDb()): Promise<void> {
+export async function bumpSyncRevision(accountId: string, db: DbExecutor = getDb()): Promise<void> {
   await db
     .update(mailAccounts)
     .set({

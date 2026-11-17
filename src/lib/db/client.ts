@@ -8,6 +8,27 @@ import * as schema from "./schema";
 
 export type Database = PostgresJsDatabase<typeof schema>;
 
+/**
+ * The executor handed to a `db.transaction` callback.
+ *
+ * Repositories that may run inside a caller's transaction accept `DbExecutor`
+ * so multi-step security operations (setup finalisation, session rotation) can
+ * be atomic without leaking a second connection.
+ */
+export type DatabaseTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+export type DbExecutor = Database | DatabaseTransaction;
+
+/** Runs atomically when given a database, or reuses a caller's transaction. */
+export function withTransaction<T>(
+  executor: DbExecutor,
+  run: (transaction: DbExecutor) => Promise<T>,
+): Promise<T> {
+  if (executor === getDb()) {
+    return (executor as Database).transaction((transaction) => run(transaction));
+  }
+  return run(executor);
+}
+
 let database: Database | null = null;
 let sqlClient: postgres.Sql | null = null;
 

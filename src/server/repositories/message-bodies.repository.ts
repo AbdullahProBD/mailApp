@@ -6,7 +6,7 @@ import { and, eq, gt, lt } from "drizzle-orm";
 import { z } from "zod";
 
 import { decryptString, encryptString } from "@/lib/crypto";
-import { getDb, type Database } from "@/lib/db/client";
+import { getDb, type DbExecutor } from "@/lib/db/client";
 import { messageBodies } from "@/lib/db/schema";
 
 /**
@@ -42,7 +42,7 @@ function decodeBody(value: string | null, rowId: string): string | null {
 /** Encrypts and caches a body, optionally replacing an expired or stale copy. */
 export async function upsertMessageBody(
   input: UpsertMessageBodyInput,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<void> {
   const body = upsertBodySchema.parse(input);
   const now = new Date();
@@ -84,7 +84,7 @@ export async function upsertMessageBody(
 export async function getMessageBody(
   messageId: string,
   now: Date = new Date(),
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<MessageBody | null> {
   const rows = await db
     .select()
@@ -109,7 +109,7 @@ export async function getMessageBody(
 /** Deletes expired cached bodies; scheduled cleanup calls this. */
 export async function deleteExpiredMessageBodies(
   now: Date = new Date(),
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<number> {
   const rows = await db
     .delete(messageBodies)
@@ -119,6 +119,9 @@ export async function deleteExpiredMessageBodies(
 }
 
 /** Deletes the cached body for one message (for example after a disconnect). */
-export async function deleteMessageBody(messageId: string, db: Database = getDb()): Promise<void> {
+export async function deleteMessageBody(
+  messageId: string,
+  db: DbExecutor = getDb(),
+): Promise<void> {
   await db.delete(messageBodies).where(eq(messageBodies.messageId, messageId));
 }

@@ -1,9 +1,9 @@
 import "server-only";
 
-import { and, eq, gt, isNull, lt } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, lt, ne } from "drizzle-orm";
 import { z } from "zod";
 
-import { getDb, type Database } from "@/lib/db/client";
+import { getDb, type DbExecutor } from "@/lib/db/client";
 import { sessions } from "@/lib/db/schema";
 
 /**
@@ -19,8 +19,10 @@ export interface SessionRecord {
   absoluteExpiresAt: Date;
   ipHash: string | null;
   userAgent: string | null;
+  country: string | null;
   mfaVerifiedAt: Date | null;
   rememberDevice: boolean;
+  tokenRotatedAt: Date | null;
   revokedAt: Date | null;
 }
 
@@ -30,6 +32,7 @@ const createSessionSchema = z.object({
   absoluteExpiresAt: z.date(),
   ipHash: z.string().min(16).max(128).optional(),
   userAgent: z.string().max(1024).optional(),
+  country: z.string().length(2).optional(),
   mfaVerifiedAt: z.date().optional(),
   rememberDevice: z.boolean().default(false),
 });
@@ -46,15 +49,17 @@ function toSessionRecord(row: typeof sessions.$inferSelect): SessionRecord {
     absoluteExpiresAt: row.absoluteExpiresAt,
     ipHash: row.ipHash ?? null,
     userAgent: row.userAgent ?? null,
+    country: row.country ?? null,
     mfaVerifiedAt: row.mfaVerifiedAt ?? null,
     rememberDevice: row.rememberDevice,
+    tokenRotatedAt: row.tokenRotatedAt ?? null,
     revokedAt: row.revokedAt ?? null,
   };
 }
 
 export async function createSession(
   input: CreateSessionInput,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<SessionRecord> {
   const session = createSessionSchema.parse(input);
 
@@ -66,6 +71,7 @@ export async function createSession(
       absoluteExpiresAt: session.absoluteExpiresAt,
       ipHash: session.ipHash ?? null,
       userAgent: session.userAgent ?? null,
+      country: session.country ?? null,
       mfaVerifiedAt: session.mfaVerifiedAt ?? null,
       rememberDevice: session.rememberDevice,
     })
@@ -85,7 +91,7 @@ export async function createSession(
 export async function findActiveSessionByTokenHash(
   tokenHash: string,
   now: Date = new Date(),
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<SessionRecord | null> {
   const rows = await db
     .select()
@@ -109,7 +115,7 @@ export async function touchSession(
   sessionId: string,
   idleExpiresAt: Date,
   now: Date = new Date(),
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<void> {
   await db
     .update(sessions)
@@ -120,7 +126,7 @@ export async function touchSession(
 export async function revokeSession(
   sessionId: string,
   now: Date = new Date(),
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<void> {
   await db
     .update(sessions)
@@ -131,15 +137,89 @@ export async function revokeSession(
 /** Revokes every session, e.g. after a password or 2FA change. */
 export async function revokeAllSessions(
   now: Date = new Date(),
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<void> {
   await db.update(sessions).set({ revokedAt: now }).where(isNull(sessions.revokedAt));
+}
+
+/** Revokes every live session except the caller's own. */
+export async function revokeOtherSessions(
+  keepSessionId: string,
+  now: Date = new Date(),
+  db: DbExecutor = getDb(),
+): Promise<number> {
+  const revocable = and(isNull(sessions.revokedAt), ne(sessions.id, keepSessionId));
+  const rows = await db
+    .update(sessions)
+    .set({ revokedAt: now })
+    .where(revocable)
+    .returning({ id: sessions.id });
+  return rows.length;
+}
+
+/** Live sessions for the device list, most recently active first. */
+export async function listActiveSessions(
+  now: Date = new Date(),
+  db: DbExecutor = getDb(),
+): Promise<SessionRecord[]> {
+  const rows = await db
+    .select()
+    .from(sessions)
+    .where(
+      and(
+        isNull(sessions.revokedAt),
+        gt(sessions.idleExpiresAt, now),
+        gt(sessions.absoluteExpiresAt, now),
+      ),
+    )
+    .orderBy(desc(sessions.lastSeenAt));
+  return rows.map(toSessionRecord);
+}
+
+/**
+ * Atomically swaps a session's token digest.
+ *
+ * Returns the updated row, or `null` when the session is revoked or gone, so a
+ * caller cannot resurrect a session that was killed concurrently.
+ */
+export async function rotateSessionTokenHash(
+  sessionId: string,
+  tokenHash: string,
+  now: Date = new Date(),
+  db: DbExecutor = getDb(),
+): Promise<SessionRecord | null> {
+  const rows = await db
+    .update(sessions)
+    .set({ tokenHash, tokenRotatedAt: now })
+    .where(
+      and(
+        eq(sessions.id, sessionId),
+        isNull(sessions.revokedAt),
+        gt(sessions.idleExpiresAt, now),
+        gt(sessions.absoluteExpiresAt, now),
+      ),
+    )
+    .returning();
+  const row = rows[0];
+  return row ? toSessionRecord(row) : null;
+}
+
+/** Marks a session as having satisfied its second factor. */
+export async function markSessionMfaVerified(
+  sessionId: string,
+  now: Date = new Date(),
+  db: DbExecutor = getDb(),
+): Promise<void> {
+  await db
+    .update(sessions)
+    .set({ mfaVerifiedAt: now })
+    .where(and(eq(sessions.id, sessionId), isNull(sessions.revokedAt)));
 }
 
 /** Deletes rows that can no longer authenticate anyone. */
 export async function deleteDeadSessions(
   now: Date = new Date(),
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<number> {
   const rows = await db
     .delete(sessions)

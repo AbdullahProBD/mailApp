@@ -6,7 +6,7 @@ import { asc, eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { decryptString, encryptString } from "@/lib/crypto";
-import { getDb, type Database } from "@/lib/db/client";
+import { getDb, withTransaction, type DbExecutor } from "@/lib/db/client";
 import { mailSenderProviders } from "@/lib/db/schema";
 
 export const SENDER_PROVIDER_KINDS = ["resend", "postmark", "ses", "smtp"] as const;
@@ -52,25 +52,30 @@ function toSenderProvider(row: typeof mailSenderProviders.$inferSelect): SenderP
 /** Stores sender credentials encrypted with an AAD bound to the row id. */
 export async function createSenderProvider(
   input: CreateSenderProviderInput,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<SenderProvider> {
   const provider = createProviderSchema.parse(input);
   const id = randomUUID();
 
-  const rows = await db
-    .insert(mailSenderProviders)
-    .values({
-      id,
-      kind: provider.kind,
-      fromAddress: provider.fromAddress,
-      fromName: provider.fromName ?? null,
-      isDefault: provider.isDefault,
-      credentialsEncrypted: encryptString(JSON.stringify(provider.credentials), {
-        table: "mail_sender_providers",
-        rowId: id,
-      }),
-    })
-    .returning();
+  const rows = await withTransaction(db, async (tx) => {
+    if (provider.isDefault) {
+      await tx.update(mailSenderProviders).set({ isDefault: false });
+    }
+    return tx
+      .insert(mailSenderProviders)
+      .values({
+        id,
+        kind: provider.kind,
+        fromAddress: provider.fromAddress,
+        fromName: provider.fromName ?? null,
+        isDefault: provider.isDefault,
+        credentialsEncrypted: encryptString(JSON.stringify(provider.credentials), {
+          table: "mail_sender_providers",
+          rowId: id,
+        }),
+      })
+      .returning();
+  });
 
   const row = rows[0];
   if (!row) {
@@ -79,7 +84,7 @@ export async function createSenderProvider(
   return toSenderProvider(row);
 }
 
-export async function listSenderProviders(db: Database = getDb()): Promise<SenderProvider[]> {
+export async function listSenderProviders(db: DbExecutor = getDb()): Promise<SenderProvider[]> {
   const rows = await db
     .select()
     .from(mailSenderProviders)
@@ -90,7 +95,7 @@ export async function listSenderProviders(db: Database = getDb()): Promise<Sende
 /** Server-only credential access for the OTP sender. */
 export async function getSenderProviderCredentials(
   providerId: string,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<Record<string, unknown>> {
   const rows = await db
     .select()
@@ -116,7 +121,7 @@ export async function getSenderProviderCredentials(
 export async function replaceSenderProviderCredentials(
   providerId: string,
   credentials: Record<string, unknown>,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<void> {
   const parsed = credentialsSchema.parse(credentials);
 
@@ -133,9 +138,9 @@ export async function replaceSenderProviderCredentials(
 
 export async function setDefaultSenderProvider(
   providerId: string,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<void> {
-  await db.transaction(async (tx) => {
+  await withTransaction(db, async (tx) => {
     await tx.update(mailSenderProviders).set({ isDefault: false });
     await tx
       .update(mailSenderProviders)
@@ -146,7 +151,7 @@ export async function setDefaultSenderProvider(
 
 export async function deleteSenderProvider(
   providerId: string,
-  db: Database = getDb(),
+  db: DbExecutor = getDb(),
 ): Promise<void> {
   await db.delete(mailSenderProviders).where(eq(mailSenderProviders.id, providerId));
 }
