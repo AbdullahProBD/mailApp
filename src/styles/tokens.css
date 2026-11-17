@@ -1,4 +1,204 @@
-/* Global design tokens are introduced in the design-system phase. */
+/*
+ * Design tokens.
+ *
+ * Everything visual resolves through these custom properties so a theme, an
+ * accent colour or a density change re-skins the whole app without touching a
+ * component. Values are OKLCH so lightness is perceptually uniform and the dark
+ * theme can be derived rather than hand-tuned per component.
+ *
+ * Layers:
+ *   1. primitive scales (colour ramps, radii, elevation, motion)
+ *   2. semantic tokens (surface, text, border, accent, status)
+ *   3. preference overrides (accent picker, density)
+ */
+
 :root {
   color-scheme: light dark;
+
+  /* ---- Accent palettes -------------------------------------------------- */
+  /* Each accent sets the same three primitives; the semantic layer derives the
+     soft tints with color-mix so they stay correct in both themes. */
+  --accent-indigo: oklch(0.52 0.19 264);
+  --accent-indigo-hover: oklch(0.47 0.2 264);
+  --accent-blue: oklch(0.54 0.17 250);
+  --accent-blue-hover: oklch(0.49 0.18 250);
+  --accent-emerald: oklch(0.52 0.14 158);
+  --accent-emerald-hover: oklch(0.47 0.14 158);
+  --accent-rose: oklch(0.55 0.19 12);
+  --accent-rose-hover: oklch(0.5 0.2 12);
+  --accent-amber: oklch(0.58 0.14 70);
+  --accent-amber-hover: oklch(0.53 0.14 70);
+  --accent-violet: oklch(0.54 0.2 300);
+  --accent-violet-hover: oklch(0.49 0.21 300);
+  --accent-slate: oklch(0.5 0.02 260);
+  --accent-slate-hover: oklch(0.45 0.02 260);
+
+  /* ---- Radii ------------------------------------------------------------ */
+  --r-xs: 0.25rem;
+  --r-sm: 0.375rem;
+  --r-md: 0.625rem;
+  --r-lg: 0.875rem;
+  --r-xl: 1.25rem;
+  --r-2xl: 1.75rem;
+  --r-full: 9999px;
+
+  /* ---- Elevation -------------------------------------------------------- */
+  --elev-xs: 0 1px 2px oklch(0.2 0.01 260 / 0.06);
+  --elev-sm: 0 1px 2px oklch(0.2 0.01 260 / 0.06), 0 1px 3px oklch(0.2 0.01 260 / 0.08);
+  --elev-md: 0 2px 4px oklch(0.2 0.01 260 / 0.06), 0 4px 12px oklch(0.2 0.01 260 / 0.08);
+  --elev-lg: 0 4px 8px oklch(0.2 0.01 260 / 0.08), 0 12px 32px oklch(0.2 0.01 260 / 0.12);
+  --elev-xl: 0 8px 16px oklch(0.2 0.01 260 / 0.1), 0 24px 64px oklch(0.2 0.01 260 / 0.16);
+
+  /* ---- Motion ----------------------------------------------------------- */
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 240ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+
+  /* ---- Z-index ---------------------------------------------------------- */
+  --z-base: 0;
+  --z-raised: 10;
+  --z-sticky: 20;
+  --z-dropdown: 30;
+  --z-overlay: 40;
+  --z-modal: 50;
+  --z-popover: 60;
+  --z-toast: 70;
+  --z-tooltip: 80;
+
+  /* ---- Control metrics (density-aware) ---------------------------------- */
+  --control-h-sm: 2rem;
+  --control-h-md: 2.5rem;
+  --control-h-lg: 3rem;
+  --control-px: 0.875rem;
+  --control-gap: 0.5rem;
+
+  /* ---- Typography ------------------------------------------------------- */
+  --text-size-2xs: 0.6875rem;
+  --text-size-2xs--line-height: 1rem;
+  --text-size-display: 2.75rem;
+  --text-size-display--line-height: 1.05;
+  --text-size-display--letter-spacing: -0.02em;
+
+  /* ---- Semantic: light -------------------------------------------------- */
+  --background: oklch(0.985 0.002 250);
+  --surface: oklch(1 0 0);
+  --surface-2: oklch(0.975 0.003 250);
+  --surface-3: oklch(0.955 0.004 250);
+  --surface-inverse: oklch(0.24 0.01 260);
+  --foreground: oklch(0.24 0.012 260);
+  --muted-foreground: oklch(0.52 0.012 260);
+  --border: oklch(0.905 0.005 260);
+  --border-strong: oklch(0.82 0.007 260);
+  --ring: oklch(0.52 0.19 264);
+
+  --accent: var(--accent-indigo);
+  --accent-hover: var(--accent-indigo-hover);
+  --accent-foreground: oklch(0.99 0 0);
+
+  --success: oklch(0.55 0.14 155);
+  --success-foreground: oklch(0.99 0 0);
+  --warning: oklch(0.62 0.14 70);
+  --warning-foreground: oklch(0.24 0.02 70);
+  --danger: oklch(0.55 0.2 25);
+  --danger-foreground: oklch(0.99 0 0);
+
+  --scrollbar-thumb: oklch(0.8 0.006 260);
+  --scrollbar-thumb-hover: oklch(0.68 0.008 260);
+}
+
+/* ---- Dark theme --------------------------------------------------------- */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --background: oklch(0.165 0.006 265);
+  --surface: oklch(0.2 0.007 265);
+  --surface-2: oklch(0.235 0.008 265);
+  --surface-3: oklch(0.27 0.009 265);
+  --surface-inverse: oklch(0.95 0.003 260);
+  --foreground: oklch(0.96 0.003 260);
+  --muted-foreground: oklch(0.71 0.012 260);
+  --border: oklch(0.3 0.008 265);
+  --border-strong: oklch(0.4 0.01 265);
+  --ring: oklch(0.62 0.18 264);
+
+  --accent: oklch(0.6 0.18 264);
+  --accent-hover: oklch(0.66 0.18 264);
+
+  --success: oklch(0.62 0.14 155);
+  --success-foreground: oklch(0.16 0.01 155);
+  --warning: oklch(0.7 0.13 70);
+  --warning-foreground: oklch(0.18 0.02 70);
+  --danger: oklch(0.62 0.19 25);
+  --danger-foreground: oklch(0.16 0.01 25);
+
+  --scrollbar-thumb: oklch(0.36 0.008 265);
+  --scrollbar-thumb-hover: oklch(0.46 0.01 265);
+
+  --elev-xs: 0 1px 2px oklch(0 0 0 / 0.4);
+  --elev-sm: 0 1px 3px oklch(0 0 0 / 0.45);
+  --elev-md: 0 2px 6px oklch(0 0 0 / 0.5), 0 6px 16px oklch(0 0 0 / 0.35);
+  --elev-lg: 0 6px 12px oklch(0 0 0 / 0.55), 0 16px 40px oklch(0 0 0 / 0.45);
+  --elev-xl: 0 10px 20px oklch(0 0 0 / 0.6), 0 28px 72px oklch(0 0 0 / 0.5);
+}
+
+/* ---- Accent picker ------------------------------------------------------ */
+[data-accent="indigo"] {
+  --accent: var(--accent-indigo);
+  --accent-hover: var(--accent-indigo-hover);
+}
+[data-accent="blue"] {
+  --accent: var(--accent-blue);
+  --accent-hover: var(--accent-blue-hover);
+}
+[data-accent="emerald"] {
+  --accent: var(--accent-emerald);
+  --accent-hover: var(--accent-emerald-hover);
+}
+[data-accent="rose"] {
+  --accent: var(--accent-rose);
+  --accent-hover: var(--accent-rose-hover);
+}
+[data-accent="amber"] {
+  --accent: var(--accent-amber);
+  --accent-hover: var(--accent-amber-hover);
+}
+[data-accent="violet"] {
+  --accent: var(--accent-violet);
+  --accent-hover: var(--accent-violet-hover);
+}
+[data-accent="slate"] {
+  --accent: var(--accent-slate);
+  --accent-hover: var(--accent-slate-hover);
+}
+
+/* ---- Density ------------------------------------------------------------ */
+[data-density="compact"] {
+  --control-h-sm: 1.75rem;
+  --control-h-md: 2.125rem;
+  --control-h-lg: 2.625rem;
+  --control-px: 0.75rem;
+  --control-gap: 0.375rem;
+}
+
+/* ---- Derived semantic tints -------------------------------------------- */
+:root {
+  --accent-soft: color-mix(in oklch, var(--accent) 12%, var(--surface));
+  --accent-soft-foreground: color-mix(in oklch, var(--accent) 82%, var(--foreground));
+  --accent-ring: color-mix(in oklch, var(--accent) 40%, transparent);
+  --success-soft: color-mix(in oklch, var(--success) 14%, var(--surface));
+  --warning-soft: color-mix(in oklch, var(--warning) 16%, var(--surface));
+  --danger-soft: color-mix(in oklch, var(--danger) 12%, var(--surface));
+}
+
+/* ---- Reduced motion ----------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 1ms;
+    --motion-base: 1ms;
+    --motion-slow: 1ms;
+    --ease-spring: linear;
+  }
 }
