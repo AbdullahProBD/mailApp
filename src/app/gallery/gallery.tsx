@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { Icon, ICON_NAMES } from "@/components/icons/icon";
 import { Accordion } from "@/components/ui/accordion";
@@ -41,6 +41,22 @@ import {
   type Density,
   type Theme,
 } from "@/lib/theme/theme";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { Calendar } from "@/components/ui/calendar";
+import { Combobox } from "@/components/ui/combobox";
+import { CommandPalette, type CommandItem } from "@/components/ui/command";
+import { DateTimePicker } from "@/components/ui/datetime-picker";
+import { Drawer } from "@/components/ui/drawer";
+import { DropdownMenu, type MenuEntry } from "@/components/ui/dropdown-menu";
+import { IconPicker, type IconColorValue } from "@/components/ui/icon-picker";
+import { Pagination } from "@/components/ui/pagination";
+import { Popover } from "@/components/ui/popover";
+import { Resizable } from "@/components/ui/resizable";
+import { Select } from "@/components/ui/select";
+import { TimePicker } from "@/components/ui/time-picker";
+import { TimezoneSelect } from "@/components/ui/timezone-select";
+import { useToast } from "@/components/ui/toast";
+import { formatInZone, zonedTimeToUtc } from "@/lib/datetime/timezone";
 
 function Section({
   title,
@@ -73,12 +89,95 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 
 export function GalleryShowcase() {
   const { settings, setTheme, setAccent, setDensity } = useTheme();
+  const { toast } = useToast();
   const [switchOn, setSwitchOn] = useState(true);
   const [checked, setChecked] = useState(true);
   const [radio, setRadio] = useState("a");
   const [slider, setSlider] = useState(40);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [progress, setProgress] = useState(65);
+  const [select, setSelect] = useState<string | null>("inbox");
+  const [combobox, setCombobox] = useState<string | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [date, setDate] = useState<string | null>(null);
+  const [time, setTime] = useState("09:00");
+  const [timeZone, setTimeZone] = useState("UTC");
+  const [icon, setIcon] = useState<IconColorValue>({ icon: "mail", color: "#4f46e5" });
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setCommandOpen(true);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+
+  const selectOptions = [
+    { value: "inbox", label: "Inbox", icon: "inbox" as const },
+    { value: "starred", label: "Starred", icon: "star" as const },
+    { value: "sent", label: "Sent", icon: "send" as const },
+    { value: "archive", label: "Archive", icon: "archive" as const },
+  ];
+  const comboboxOptions = [
+    { value: "ada", label: "Ada Lovelace" },
+    { value: "grace", label: "Grace Hopper" },
+    { value: "alan", label: "Alan Turing" },
+    { value: "edsger", label: "Edsger Dijkstra" },
+  ];
+  const menuItems: MenuEntry[] = [
+    {
+      type: "item",
+      value: "reply",
+      label: "Reply",
+      icon: "arrow-left",
+      shortcut: "R",
+      onSelect: () => {},
+    },
+    { type: "item", value: "forward", label: "Forward", icon: "arrow-right", onSelect: () => {} },
+    { type: "separator" },
+    { type: "label", label: "Message" },
+    { type: "item", value: "archive", label: "Archive", icon: "archive", onSelect: () => {} },
+    {
+      type: "item",
+      value: "delete",
+      label: "Delete",
+      icon: "trash",
+      danger: true,
+      onSelect: () => {},
+    },
+  ];
+  const commands: CommandItem[] = [
+    { id: "compose", label: "Compose message", icon: "edit", shortcut: "C", onSelect: () => {} },
+    { id: "search", label: "Search mail", icon: "search", shortcut: "⌘K", onSelect: () => {} },
+    { id: "settings", label: "Open settings", icon: "settings", onSelect: () => {} },
+    { id: "logout", label: "Sign out", icon: "log-out", onSelect: () => {} },
+  ];
+
+  function toInstant(): Date | null {
+    if (!date) return null;
+    const [year, month, day] = date.split("-").map(Number);
+    const [hour, minute] = time.split(":").map(Number);
+    return zonedTimeToUtc(
+      {
+        year: year ?? 1970,
+        month: month ?? 1,
+        day: day ?? 1,
+        hour: hour ?? 0,
+        minute: minute ?? 0,
+      },
+      timeZone,
+    );
+  }
+  const instant = toInstant();
+  const triggerClass =
+    "inline-flex h-[var(--control-h-md)] items-center justify-center rounded-md border border-border bg-surface px-[var(--control-px)] text-sm font-medium text-foreground shadow-xs transition-colors hover:bg-surface-2";
 
   return (
     <main className="min-h-full px-6 py-12">
@@ -444,6 +543,196 @@ export function GalleryShowcase() {
           </Card>
         </Section>
 
+        <Section title="Navigation" description="Menus, selects, breadcrumbs and pagination.">
+          <div className="flex flex-col gap-5">
+            <Row label="Dropdown menu">
+              <DropdownMenu
+                trigger="More"
+                triggerClassName={triggerClass}
+                triggerLabel="More actions"
+                items={menuItems}
+              />
+            </Row>
+            <Row label="Select">
+              <div className="w-56">
+                <Select
+                  label="Folder"
+                  value={select}
+                  onValueChange={setSelect}
+                  options={selectOptions}
+                />
+              </div>
+              <span className="text-sm text-muted-foreground">{select ?? "none"}</span>
+            </Row>
+            <Row label="Combobox">
+              <div className="w-64">
+                <Combobox
+                  label="Contact"
+                  value={combobox}
+                  onValueChange={setCombobox}
+                  options={comboboxOptions}
+                />
+              </div>
+              <span className="text-sm text-muted-foreground">{combobox ?? "none"}</span>
+            </Row>
+            <Row label="Breadcrumb">
+              <Breadcrumb
+                items={[{ label: "Mail", href: "/" }, { label: "Projects" }, { label: "Roadmap" }]}
+              />
+            </Row>
+            <Row label="Pagination">
+              <Pagination page={page} pageCount={8} onPageChange={setPage} />
+            </Row>
+            <Row label="Resizable">
+              <div className="w-full">
+                <Resizable
+                  className="h-40 rounded-xl border border-border"
+                  handleLabel="Resize demo"
+                  first={
+                    <div className="flex h-full items-center justify-center bg-surface-2 text-sm text-muted-foreground">
+                      Sidebar
+                    </div>
+                  }
+                  second={
+                    <div className="flex h-full items-center justify-center bg-surface text-sm text-muted-foreground">
+                      Content
+                    </div>
+                  }
+                />
+              </div>
+            </Row>
+          </div>
+        </Section>
+
+        <Section
+          title="Overlays & feedback"
+          description="Popovers, drawers, toasts and the command palette."
+        >
+          <div className="flex flex-col gap-5">
+            <Row label="Popover">
+              <Popover trigger="Options" triggerClassName={triggerClass} triggerLabel="Options">
+                {(close) => (
+                  <div className="p-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        toast({ title: "Popover action", tone: "success" });
+                        close();
+                      }}
+                      className="w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-surface-2"
+                    >
+                      Run action
+                    </button>
+                  </div>
+                )}
+              </Popover>
+            </Row>
+            <Row label="Drawer">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setDrawerOpen(true);
+                }}
+              >
+                Open panel
+              </Button>
+            </Row>
+            <Row label="Toast">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  toast({
+                    title: "Message archived",
+                    description: "It was moved out of the inbox.",
+                    tone: "success",
+                    action: { label: "Undo", onClick: () => undefined },
+                  });
+                }}
+              >
+                Show toast
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  toast({
+                    title: "Could not send message",
+                    description: "The recipient address was rejected.",
+                    tone: "danger",
+                  });
+                }}
+              >
+                Show error
+              </Button>
+            </Row>
+            <Row label="Command palette">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setCommandOpen(true);
+                }}
+              >
+                Open palette
+              </Button>
+              <span className="flex items-center gap-1 text-sm text-muted-foreground">
+                or press <Kbd>⌘</Kbd>
+                <Kbd>K</Kbd>
+              </span>
+            </Row>
+          </div>
+        </Section>
+
+        <Section
+          title="Date & time"
+          description="Calendar, time, timezone and a combined picker. The instant is DST-safe."
+        >
+          <div className="flex flex-col gap-5">
+            <Row label="Calendar">
+              <div className="w-72">
+                <Calendar value={date} onChange={setDate} />
+              </div>
+              <span className="text-sm text-muted-foreground">{date ?? "none"}</span>
+            </Row>
+            <Row label="Time">
+              <TimePicker value={time} onChange={setTime} hour12 />
+              <span className="text-sm tabular text-muted-foreground">{time}</span>
+            </Row>
+            <Row label="Time zone">
+              <div className="w-64">
+                <TimezoneSelect value={timeZone} onChange={setTimeZone} />
+              </div>
+            </Row>
+            <div className="rounded-xl border border-border bg-surface-2 p-4">
+              <p className="text-sm font-medium">Resolved instant</p>
+              <p className="mt-1 font-mono text-xs text-muted-foreground">
+                {instant ? instant.toISOString() : "Select a date to see the UTC instant"}
+              </p>
+              {instant ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  In {timeZone}: {formatInZone(instant, timeZone)}
+                </p>
+              ) : null}
+            </div>
+            <DateTimePicker
+              date={date}
+              time={time}
+              timeZone={timeZone}
+              onDateChange={setDate}
+              onTimeChange={setTime}
+              onTimeZoneChange={setTimeZone}
+              hour12
+            />
+          </div>
+        </Section>
+
+        <Section
+          title="Icon & colour picker"
+          description="Searchable icons with a curated palette."
+        >
+          <div className="w-72">
+            <IconPicker value={icon} onChange={setIcon} />
+          </div>
+        </Section>
+
         <Section
           title="Skeletons"
           description="Shimmer placeholders; disabled under reduced motion."
@@ -507,6 +796,42 @@ export function GalleryShowcase() {
           The message will move to Trash and can be restored within 30 days.
         </p>
       </Dialog>
+
+      <Drawer
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        title="Message details"
+        description="Headers and delivery information."
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setDrawerOpen(false);
+              }}
+            >
+              Close
+            </Button>
+            <Button variant="primary">Reply</Button>
+          </>
+        }
+      >
+        <dl className="space-y-3">
+          {[
+            ["From", "Ada Lovelace <ada@example.com>"],
+            ["To", "owner@example.com"],
+            ["Subject", "Design review notes"],
+            ["Date", "Today, 09:41"],
+          ].map(([term, value]) => (
+            <div key={term} className="grid grid-cols-24 gap-2">
+              <dt className="text-muted-foreground">{term}</dt>
+              <dd className="col-span-23 text-foreground">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </Drawer>
+
+      <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} commands={commands} />
     </main>
   );
 }

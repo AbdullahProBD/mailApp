@@ -4,6 +4,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
 
 import { ThemeProvider } from "@/components/theme/theme-provider";
+import { ToastProvider } from "@/components/ui/toast";
 import { THEME_INIT_SCRIPT } from "@/lib/theme/theme";
 import "../styles/tokens.css";
 import "./globals.css";
@@ -51,7 +52,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           strategy="beforeInteractive"
           dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }}
         />
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          <ToastProvider>{children}</ToastProvider>
+        </ThemeProvider>
       </body>
     </html>
   );
