@@ -30,6 +30,12 @@
   "dependencies": {
     "@aws-sdk/client-sesv2": "3.1169.0",
     "@node-rs/argon2": "2.2.2",
+    "@tiptap/extension-placeholder": "3.34.0",
+    "@tiptap/extension-task-item": "3.34.0",
+    "@tiptap/extension-task-list": "3.34.0",
+    "@tiptap/pm": "3.34.0",
+    "@tiptap/react": "3.34.0",
+    "@tiptap/starter-kit": "3.34.0",
     "@upstash/redis": "1.37.0",
     "@zxcvbn-ts/core": "4.3.0",
     "@zxcvbn-ts/language-common": "4.1.2",
@@ -47,6 +53,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
     "@commitlint/cli": "21.2.4",
     "@commitlint/config-conventional": "21.2.4",
     "@electric-sql/pglite": "0.5.16",

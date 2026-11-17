@@ -43,6 +43,8 @@ import {
 } from "@/lib/theme/theme";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Calendar } from "@/components/ui/calendar";
+import { NotesEditor } from "@/components/ui/notes-editor";
+import { SwipeableRow } from "@/components/ui/swipeable-row";
 import { Combobox } from "@/components/ui/combobox";
 import { CommandPalette, type CommandItem } from "@/components/ui/command";
 import { DateTimePicker } from "@/components/ui/datetime-picker";
@@ -105,6 +107,7 @@ export function GalleryShowcase() {
   const [timeZone, setTimeZone] = useState("UTC");
   const [icon, setIcon] = useState<IconColorValue>({ icon: "mail", color: "#4f46e5" });
   const [page, setPage] = useState(1);
+  const [notes, setNotes] = useState("");
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -730,6 +733,72 @@ export function GalleryShowcase() {
         >
           <div className="w-72">
             <IconPicker value={icon} onChange={setIcon} />
+          </div>
+        </Section>
+
+        <Section
+          title="Rich notes editor"
+          description="TipTap with checklists, headings, lists and formatting."
+        >
+          <div className="max-w-xl">
+            <NotesEditor
+              onChange={setNotes}
+              content={
+                notes ||
+                '<h3>Today</h3><ul data-type="taskList"><li data-type="taskItem" data-checked="true">Review inbox</li><li data-type="taskItem" data-checked="false">Reply to Ada</li></ul><p></p>'
+              }
+            />
+          </div>
+        </Section>
+
+        <Section
+          title="Swipeable row"
+          description="Swipe or focus the row and use arrow keys to reveal actions."
+        >
+          <div className="max-w-xl space-y-3">
+            <SwipeableRow
+              leftActions={
+                <div className="flex">
+                  <button
+                    type="button"
+                    className="flex w-20 flex-col items-center justify-center gap-1 bg-success text-success-foreground"
+                  >
+                    <Icon name="check" size={18} />
+                    <span className="text-2xs">Read</span>
+                  </button>
+                </div>
+              }
+              rightActions={
+                <div className="flex">
+                  <button
+                    type="button"
+                    className="flex w-20 flex-col items-center justify-center gap-1 bg-warning text-warning-foreground"
+                  >
+                    <Icon name="archive" size={18} />
+                    <span className="text-2xs">Archive</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-20 flex-col items-center justify-center gap-1 bg-danger text-danger-foreground"
+                  >
+                    <Icon name="trash" size={18} />
+                    <span className="text-2xs">Delete</span>
+                  </button>
+                </div>
+              }
+            >
+              <div className="flex items-center gap-3 border-b border-border px-4 py-3">
+                <Avatar name="Ada Lovelace" size="sm" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">Ada Lovelace</p>
+                  <p className="truncate text-xs text-muted-foreground">Design review notes</p>
+                </div>
+              </div>
+            </SwipeableRow>
+            <p className="text-xs text-muted-foreground">
+              On touch, drag the row left or right. With a keyboard, focus it and press the arrow
+              keys.
+            </p>
           </div>
         </Section>
 
