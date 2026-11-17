@@ -102,9 +102,10 @@ export function applyThemeSettings(
  * Pre-hydration script. Runs synchronously in <head> before the body paints so
  * the stored theme/accent/density is already applied and there is no flash of
  * the wrong theme.
+ *
+ * The script is a constant string with no interpolation: the storage key and
+ * accent list are duplicated here on purpose so nothing dynamic is ever built
+ * into executable code. `theme.test.ts` asserts this stays in sync with
+ * THEME_STORAGE_KEY and ACCENTS.
  */
-export const THEME_INIT_SCRIPT = `(function(){try{var s=JSON.parse(localStorage.getItem(${JSON.stringify(
-  THEME_STORAGE_KEY,
-)})||"{}");var t=s.theme==="light"||s.theme==="dark"?s.theme:(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");var r=document.documentElement;r.dataset.theme=t;r.dataset.accent=${JSON.stringify(
-  ACCENTS,
-)}.indexOf(s.accent)>-1?s.accent:"indigo";r.dataset.density=s.density==="compact"?"compact":"comfortable";r.style.colorScheme=t;}catch(e){}})();`;
+export const THEME_INIT_SCRIPT = `(function(){try{var s=JSON.parse(localStorage.getItem("mailapp:theme")||"{}");var t=s.theme==="light"||s.theme==="dark"?s.theme:(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");var r=document.documentElement;r.dataset.theme=t;r.dataset.accent=["indigo","blue","emerald","rose","amber","violet","slate"].indexOf(s.accent)>-1?s.accent:"indigo";r.dataset.density=s.density==="compact"?"compact":"comfortable";r.style.colorScheme=t;}catch(e){}})();`;

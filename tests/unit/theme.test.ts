@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ACCENTS,
   applyThemeSettings,
   DEFAULT_THEME_SETTINGS,
   parseThemeSettings,
   readStoredThemeSettings,
   resolveTheme,
+  THEME_INIT_SCRIPT,
   THEME_STORAGE_KEY,
   writeStoredThemeSettings,
   type ThemeSettings,
@@ -91,5 +93,12 @@ describe("theme resolution", () => {
     expect(root.dataset.accent).toBe("violet");
     expect(root.dataset.density).toBe("compact");
     expect(root.style.colorScheme).toBe("dark");
+  });
+
+  it("keeps the pre-hydration script in sync with the storage key and accents", () => {
+    expect(THEME_INIT_SCRIPT).toContain(`"${THEME_STORAGE_KEY}"`);
+    for (const accent of ACCENTS) {
+      expect(THEME_INIT_SCRIPT).toContain(`"${accent}"`);
+    }
   });
 });
