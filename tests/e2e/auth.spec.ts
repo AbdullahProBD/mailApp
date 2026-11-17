@@ -54,7 +54,11 @@ async function signIn(page: Page, password: string): Promise<void> {
 
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Your inbox" })).toBeVisible();
-  await expect(page.getByText(`Welcome, ${OWNER_EMAIL}`)).toBeVisible();
+  // Role-based + exact: a streamed loading boundary can briefly expose a
+  // duplicate copy of the content, and getByText would match both.
+  await expect(
+    page.getByRole("heading", { name: `Welcome, ${OWNER_EMAIL}`, exact: true }),
+  ).toBeVisible();
 }
 
 /** Completes the password + second-factor step-up the settings page requires. */
