@@ -101,9 +101,14 @@ test("owner setup, session controls, recovery and sign-in", async ({ page }) => 
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Your inbox" })).toBeVisible();
 
-  // The wizard is permanently closed after completion.
+  // The wizard is permanently closed after completion. A loading boundary can
+  // turn notFound() into a streamed 200 shell, so assert the wizard never renders.
   const setupAfterCompletion = await page.goto("/setup");
-  expect(setupAfterCompletion?.status()).toBe(404);
+  if (setupAfterCompletion?.status() === 200) {
+    await expect(page.locator("body")).not.toContainText("Set up your owner account");
+  } else {
+    expect(setupAfterCompletion?.status()).toBe(404);
+  }
   await page.goto("/");
 
   // Settings lists the live session and the verified second factor.
