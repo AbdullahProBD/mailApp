@@ -62,6 +62,34 @@ export const serverEnvSchema = z.object({
     .min(1, "AUTH_SESSION_ABSOLUTE_HOURS must be at least 1")
     .max(168, "AUTH_SESSION_ABSOLUTE_HOURS must be at most 168")
     .default(12),
+  /** Default spacing between drip-batch messages when the owner has not chosen one. */
+  DRIP_DEFAULT_INTERVAL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(5, "DRIP_DEFAULT_INTERVAL_SECONDS must be at least 5")
+    .max(3600, "DRIP_DEFAULT_INTERVAL_SECONDS must be at most 3600")
+    .default(20),
+  /** Hard cap on messages in one batch (bounds checked in code and in the database). */
+  MAX_BATCH_SIZE: z.coerce
+    .number()
+    .int()
+    .min(1, "MAX_BATCH_SIZE must be at least 1")
+    .max(500, "MAX_BATCH_SIZE must be at most 500")
+    .default(500),
+  /** Hard cap on pending scheduled emails across every account. */
+  MAX_PENDING_SCHEDULED_EMAILS: z.coerce
+    .number()
+    .int()
+    .min(1, "MAX_PENDING_SCHEDULED_EMAILS must be at least 1")
+    .max(100_000, "MAX_PENDING_SCHEDULED_EMAILS must be at most 100000")
+    .default(2000),
+  /** Default per-account daily send cap until the owner changes it. */
+  DEFAULT_DAILY_SEND_CAP: z.coerce
+    .number()
+    .int()
+    .min(1, "DEFAULT_DAILY_SEND_CAP must be at least 1")
+    .max(100_000, "DEFAULT_DAILY_SEND_CAP must be at most 100000")
+    .default(500),
   /** Have I Been Pwned range API base. Overridable so tests never hit the network. */
   HIBP_API_URL: z.url("HIBP_API_URL must be a valid URL").default("https://api.pwnedpasswords.com"),
   SENTRY_DSN: z.url("SENTRY_DSN must be a valid URL").optional(),

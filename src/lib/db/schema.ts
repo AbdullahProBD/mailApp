@@ -2,6 +2,7 @@ import {
   bigint,
   boolean,
   customType,
+  date,
   index,
   integer,
   jsonb,
@@ -316,6 +317,26 @@ export const drafts = pgTable(
   (table) => [uniqueIndex("drafts_provider_unique").on(table.accountId, table.providerDraftId)],
 );
 
+export const scheduleBatches = pgTable(
+  "schedule_batches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => mailAccounts.id, { onDelete: "cascade" }),
+    /** First send instant, computed on the server. */
+    startAtUtc: timestamp("start_at_utc", { withTimezone: true }).notNull(),
+    startTimeZone: text("start_time_zone").notNull(),
+    /** The wall-clock start the owner chose, for display and for resuming. */
+    startLocalTime: timestamp("start_local_time", { withTimezone: false }).notNull(),
+    intervalSeconds: integer("interval_seconds").notNull().default(20),
+    totalCount: integer("total_count").notNull(),
+    state: text("state").notNull().default("scheduled"),
+    ...timestamps,
+  },
+  (table) => [index("schedule_batches_account_idx").on(table.accountId, table.createdAt)],
+);
+
 export const scheduledEmails = pgTable(
   "scheduled_emails",
   {
@@ -323,6 +344,8 @@ export const scheduledEmails = pgTable(
     accountId: uuid("account_id")
       .notNull()
       .references(() => mailAccounts.id, { onDelete: "cascade" }),
+    batchId: uuid("batch_id").references(() => scheduleBatches.id, { onDelete: "set null" }),
+    batchPosition: integer("batch_position"),
     draftPayload: jsonb("draft_payload").notNull(),
     sendAtUtc: timestamp("send_at_utc", { withTimezone: true }).notNull(),
     timeZone: text("time_zone").notNull(),
@@ -336,7 +359,26 @@ export const scheduledEmails = pgTable(
     sentAt: timestamp("sent_at", { withTimezone: true }),
     ...timestamps,
   },
-  (table) => [uniqueIndex("scheduled_emails_idempotency_unique").on(table.idempotencyKey)],
+  (table) => [
+    uniqueIndex("scheduled_emails_idempotency_unique").on(table.idempotencyKey),
+    uniqueIndex("scheduled_emails_batch_position_unique").on(table.batchId, table.batchPosition),
+  ],
+);
+
+/** Per-account, per-UTC-day send counter and pacing timestamp. */
+export const accountSendQuota = pgTable(
+  "account_send_quota",
+  {
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => mailAccounts.id, { onDelete: "cascade" }),
+    quotaDate: date("quota_date").notNull(),
+    sentCount: integer("sent_count").notNull().default(0),
+    dailyCap: integer("daily_cap").notNull(),
+    nextAllowedSendAt: timestamp("next_allowed_send_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [primaryKey({ columns: [table.accountId, table.quotaDate] })],
 );
 
 export const signatures = pgTable("signatures", {

@@ -138,6 +138,54 @@ export async function listMailAccounts(db: DbExecutor = getDb()): Promise<MailAc
   );
 }
 
+export async function getMailAccount(
+  accountId: string,
+  db: DbExecutor = getDb(),
+): Promise<MailAccount | null> {
+  const rows = await db.select().from(mailAccounts).where(eq(mailAccounts.id, accountId)).limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  return toMailAccount(row, {
+    hasCredentials: row.credentialsEncrypted !== null,
+    hasOauthTokens: row.oauthTokensEncrypted !== null,
+  });
+}
+
+const updateAccountSchema = z
+  .object({
+    displayName: z.string().min(1).max(120).optional(),
+    icon: z.string().max(2048).optional(),
+    iconColor: z
+      .string()
+      .regex(/^#[0-9a-fA-F]{6}$/)
+      .optional(),
+    replyTo: z.email().max(320).optional(),
+    syncIntervalMinutes: z.int().min(1).max(1440).optional(),
+  })
+  .strict();
+
+export type UpdateMailAccountInput = z.input<typeof updateAccountSchema>;
+
+/** Updates non-secret account metadata. Credentials are never accepted here. */
+export async function updateMailAccount(
+  accountId: string,
+  input: UpdateMailAccountInput,
+  db: DbExecutor = getDb(),
+): Promise<MailAccount | null> {
+  const patch = updateAccountSchema.parse(input);
+  const rows = await db
+    .update(mailAccounts)
+    .set(patch)
+    .where(eq(mailAccounts.id, accountId))
+    .returning();
+  const row = rows[0];
+  if (!row) return null;
+  return toMailAccount(row, {
+    hasCredentials: row.credentialsEncrypted !== null,
+    hasOauthTokens: row.oauthTokensEncrypted !== null,
+  });
+}
+
 /**
  * Decrypts credentials for a single account.
  *
@@ -216,7 +264,12 @@ export async function reorderMailAccounts(
   orderedIds: readonly string[],
   db: DbExecutor = getDb(),
 ): Promise<void> {
-  const ids = z.array(z.uuid()).min(1).max(100).parse(orderedIds);
+  const ids = z
+    .array(z.uuid())
+    .min(1)
+    .max(100)
+    .refine((value) => new Set(value).size === value.length, "Duplicate account ids")
+    .parse(orderedIds);
 
   await db.transaction(async (tx) => {
     for (const [index, id] of ids.entries()) {

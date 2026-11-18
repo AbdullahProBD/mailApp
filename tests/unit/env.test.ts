@@ -26,6 +26,26 @@ describe("server environment validation", () => {
     expect(parseServerEnv(REQUIRED_ENV).NODE_ENV).toBe("development");
   });
 
+  it("defaults the send-safety limits to the documented values", () => {
+    const env = parseServerEnv(REQUIRED_ENV);
+    expect(env.DRIP_DEFAULT_INTERVAL_SECONDS).toBe(20);
+    expect(env.MAX_BATCH_SIZE).toBe(500);
+    expect(env.MAX_PENDING_SCHEDULED_EMAILS).toBe(2000);
+    expect(env.DEFAULT_DAILY_SEND_CAP).toBe(500);
+  });
+
+  it("rejects send-safety limits outside their hard bounds", () => {
+    expect(() => parseServerEnv({ ...REQUIRED_ENV, DRIP_DEFAULT_INTERVAL_SECONDS: "4" })).toThrow(
+      /DRIP_DEFAULT_INTERVAL_SECONDS/,
+    );
+    expect(() => parseServerEnv({ ...REQUIRED_ENV, MAX_BATCH_SIZE: "501" })).toThrow(
+      /MAX_BATCH_SIZE/,
+    );
+    expect(() => parseServerEnv({ ...REQUIRED_ENV, DEFAULT_DAILY_SEND_CAP: "0" })).toThrow(
+      /DEFAULT_DAILY_SEND_CAP/,
+    );
+  });
+
   it("fails fast and names the missing variable", () => {
     const withoutCronSecret: Record<string, string> = { ...REQUIRED_ENV };
     Reflect.deleteProperty(withoutCronSecret, "CRON_SECRET");

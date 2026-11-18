@@ -58,6 +58,35 @@ export default defineConfig([
       "security/detect-non-literal-fs-filename": "off",
     },
   },
+  {
+    // UI time rule: screens show hours and minutes only, so every instant is
+    // rendered by src/lib/datetime/format.ts. Direct Intl/locale formatting in
+    // UI source is rejected because it can emit seconds.
+    files: ["src/app/**/*.{ts,tsx}", "src/components/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "NewExpression[callee.object.object.name='Intl'][callee.object.property.name='DateTimeFormat']",
+          message:
+            "Format UI times with formatTime/formatDateTime from src/lib/datetime/format.ts, not Intl.DateTimeFormat.",
+        },
+        {
+          selector:
+            "CallExpression[callee.object.object.name='Intl'][callee.object.property.name='DateTimeFormat']",
+          message:
+            "Format UI times with formatTime/formatDateTime from src/lib/datetime/format.ts, not Intl.DateTimeFormat.",
+        },
+        {
+          selector:
+            "CallExpression[callee.property.name=/^(toLocaleString|toLocaleTimeString|toLocaleDateString)$/]",
+          message:
+            "Format UI times with formatTime/formatDateTime from src/lib/datetime/format.ts, not locale methods that can emit seconds.",
+        },
+      ],
+    },
+  },
   globalIgnores([
     ".next/**",
     "out/**",

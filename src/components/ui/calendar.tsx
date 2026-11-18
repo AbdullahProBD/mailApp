@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 import { Icon } from "@/components/icons/icon";
 import { buildMonthGrid, isDateKey, parseDateKey } from "@/lib/datetime/calendar";
+import { formatMonthYear } from "@/lib/datetime/format";
 import { cn } from "@/lib/utils/cn";
 
 const WEEKDAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"] as const;
@@ -33,11 +34,7 @@ export function Calendar({ value, onChange, min, max, className }: CalendarProps
   });
 
   const cells = useMemo(() => buildMonthGrid(view.year, view.month), [view]);
-  const monthLabel = new Intl.DateTimeFormat("en", {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(Date.UTC(view.year, view.month, 1)));
+  const monthLabel = formatMonthYear(new Date(Date.UTC(view.year, view.month, 1)), "UTC");
 
   function shiftMonth(delta: number) {
     const next = new Date(Date.UTC(view.year, view.month + delta, 1));

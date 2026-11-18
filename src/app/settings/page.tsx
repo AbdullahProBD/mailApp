@@ -8,6 +8,7 @@ import { getOwner } from "@/server/services/auth.service";
 import { getSessionFingerprint } from "@/server/services/session.service";
 import { listMfaMethods } from "@/server/repositories/mfa-methods.repository";
 import { SecuritySettings } from "./security-settings";
+import { SettingsNav } from "./settings-nav";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Security settings" };
@@ -43,19 +44,20 @@ export default async function SettingsPage() {
   });
 
   return (
-    <main className="min-h-full bg-stone-50 px-6 py-12 text-stone-950 dark:bg-stone-950 dark:text-stone-50">
+    <main className="min-h-full bg-surface-2 px-6 py-12 text-foreground">
       <div className="mx-auto max-w-3xl">
-        <nav aria-label="Breadcrumb" className="text-sm text-stone-500">
+        <nav aria-label="Breadcrumb" className="text-sm text-muted-foreground">
           <Link className="underline-offset-4 hover:underline" href="/">
             Inbox
           </Link>{" "}
           / Security
         </nav>
         <h1 className="mt-3 text-3xl font-semibold tracking-tight">Security</h1>
-        <p className="mt-3 text-sm leading-6 text-stone-600 dark:text-stone-300">
+        <p className="mt-3 text-sm leading-6 text-muted-foreground">
           Signed in as {authenticated.owner.email}. Passwords, two-factor methods and sessions are
           managed here.
         </p>
+        <SettingsNav active="security" />
         <div className="mt-8">
           <SecuritySettings
             sessions={rows}

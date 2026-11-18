@@ -106,8 +106,8 @@ describe("database migrations", () => {
       }
 
       for (const [table, tableColumns] of byTable) {
-        if (table === "message_labels") {
-          // Composite primary key by design: a label assignment has no own id.
+        if (table === "message_labels" || table === "account_send_quota") {
+          // Composite primary keys by design: neither row has its own identity.
           continue;
         }
         expect(tableColumns.get("id"), `${table}.id should be uuid`).toBe("uuid");
@@ -176,6 +176,82 @@ describe("database migrations", () => {
     } finally {
       await database.close();
     }
+  });
+
+  it("enforces drip batch, position and pacing constraints", async () => {
+    const database = await createTestDatabase();
+    try {
+      const account = await database.pglite.query<{ id: string }>(
+        "INSERT INTO mail_accounts (provider_type, address, display_name) VALUES ('imap', 'owner@example.com', 'Owner') RETURNING id",
+      );
+      const accountId = account.rows[0]?.id ?? "";
+
+      const batch = await database.pglite.query<{ id: string }>(
+        `INSERT INTO schedule_batches (account_id, start_at_utc, start_time_zone, start_local_time, total_count)
+         VALUES ($1, '2026-11-18T20:00:00Z', 'UTC', '2026-11-18T20:00:00', 2) RETURNING id`,
+        [accountId],
+      );
+      const batchId = batch.rows[0]?.id ?? "";
+
+      // Spacing is bounded by the database, not only by the application.
+      await expect(
+        database.pglite.query(
+          `INSERT INTO schedule_batches (account_id, start_at_utc, start_time_zone, start_local_time, total_count, interval_seconds)
+           VALUES ($1, now(), 'UTC', now(), 1, 4)`,
+          [accountId],
+        ),
+      ).rejects.toThrow(/schedule_batches_interval_check|violates check constraint/);
+
+      const insertRow = (position: number, idempotencyKey: string) =>
+        database.pglite.query(
+          `INSERT INTO scheduled_emails
+             (account_id, batch_id, batch_position, draft_payload, send_at_utc, time_zone, local_send_time, idempotency_key)
+           VALUES ($1, $2, $3, '{}'::jsonb, '2026-11-18T20:00:00Z', 'UTC', '2026-11-18T20:00:00', $4)`,
+          [accountId, batchId, position, idempotencyKey],
+        );
+
+      await insertRow(0, "batch-row-0");
+      await expect(insertRow(0, "batch-row-duplicate")).rejects.toThrow(
+        /scheduled_emails_batch_position_unique|duplicate key/,
+      );
+
+      // A position without a batch is ambiguous and rejected.
+      await expect(
+        database.pglite.query(
+          `INSERT INTO scheduled_emails
+             (account_id, batch_position, draft_payload, send_at_utc, time_zone, local_send_time, idempotency_key)
+           VALUES ($1, 1, '{}'::jsonb, '2026-11-18T20:00:20Z', 'UTC', '2026-11-18T20:00:20', 'orphan-position')`,
+          [accountId],
+        ),
+      ).rejects.toThrow(/scheduled_emails_batch_position_check|violates check constraint/);
+
+      await database.pglite.query(
+        "INSERT INTO account_send_quota (account_id, quota_date, daily_cap) VALUES ($1, '2026-11-18', 500)",
+        [accountId],
+      );
+      await expect(
+        database.pglite.query(
+          "INSERT INTO account_send_quota (account_id, quota_date, daily_cap) VALUES ($1, '2026-11-18', 500)",
+          [accountId],
+        ),
+      ).rejects.toThrow(/account_send_quota_pkey|duplicate key/);
+      await expect(
+        database.pglite.query(
+          "UPDATE account_send_quota SET sent_count = -1 WHERE account_id = $1 AND quota_date = '2026-11-18'",
+          [accountId],
+        ),
+      ).rejects.toThrow(/account_send_quota_sent_check|violates check constraint/);
+    } finally {
+      await database.close();
+    }
+  });
+
+  it("never truncates send times in schema or dispatcher queries", async () => {
+    const migrations = await loadMigrations(
+      path.resolve(import.meta.dirname, "../../db/migrations"),
+    );
+    const text = migrations.map((migration) => migration.sql).join("\n");
+    expect(text).not.toMatch(/date_trunc\s*\(\s*'minute'/i);
   });
 
   it("is idempotent when migrations run twice", async () => {

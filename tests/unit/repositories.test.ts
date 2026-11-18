@@ -46,9 +46,11 @@ import {
 import {
   createMailAccount,
   deleteMailAccount,
+  getMailAccount,
   getMailAccountCredentials,
   listMailAccounts,
   setDefaultSender,
+  updateMailAccount,
 } from "@/server/repositories/mail-accounts.repository";
 import {
   createSenderProvider,
@@ -395,6 +397,63 @@ describe("mail account repository", () => {
     await deleteMailAccount(first.id, database.db);
     const remaining = await listMailAccounts(database.db);
     expect(remaining.find((account) => account.id === first.id)).toBeUndefined();
+  });
+
+  it("updates personalization without touching credentials", async () => {
+    const account = await createMailAccount(
+      {
+        providerType: "imap",
+        address: "edit@example.com",
+        displayName: "Before",
+        credentials: { password: "still-secret" },
+      },
+      database.db,
+    );
+
+    const updated = await updateMailAccount(
+      account.id,
+      {
+        displayName: "After",
+        iconColor: "#0ea5e9",
+        replyTo: "replies@example.com",
+        syncIntervalMinutes: 15,
+      },
+      database.db,
+    );
+
+    expect(updated?.displayName).toBe("After");
+    expect(updated?.iconColor).toBe("#0ea5e9");
+    expect(updated?.replyTo).toBe("replies@example.com");
+    expect(updated?.syncIntervalMinutes).toBe(15);
+    expect(JSON.stringify(updated)).not.toContain("still-secret");
+    expect((await getMailAccountCredentials(account.id, database.db)).credentials).toEqual({
+      password: "still-secret",
+    });
+
+    expect(await getMailAccount(account.id, database.db)).toMatchObject({
+      id: account.id,
+      displayName: "After",
+    });
+    expect(await getMailAccount("00000000-0000-0000-0000-000000000000", database.db)).toBeNull();
+  });
+
+  it("rejects hidden secret fields in metadata updates", async () => {
+    const account = await createMailAccount(
+      {
+        providerType: "imap",
+        address: "strict@example.com",
+        displayName: "Strict",
+      },
+      database.db,
+    );
+
+    await expect(
+      updateMailAccount(
+        account.id,
+        { displayName: "X", credentials: { password: "leak" } } as never,
+        database.db,
+      ),
+    ).rejects.toThrow();
   });
 });
 

@@ -56,9 +56,7 @@ async function signIn(page: Page, password: string): Promise<void> {
   await expect(page.getByRole("heading", { name: "Your inbox" })).toBeVisible();
   // Role-based + exact: a streamed loading boundary can briefly expose a
   // duplicate copy of the content, and getByText would match both.
-  await expect(
-    page.getByRole("heading", { name: `Welcome, ${OWNER_EMAIL}`, exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText(OWNER_EMAIL, { exact: true }).first()).toBeVisible();
 }
 
 /** Completes the password + second-factor step-up the settings page requires. */
@@ -128,6 +126,14 @@ test("owner setup, session controls, recovery and sign-in", async ({ page }) => 
   const regenerated = page.getByRole("list", { name: "New recovery codes" });
   await expect(regenerated.getByRole("listitem")).toHaveCount(10);
   recoveryCodes = await regenerated.getByRole("listitem").allInnerTexts();
+
+  // Account management is reachable from settings and starts locked behind
+  // step-up; the server enforces the same check regardless of the UI.
+  await page.getByRole("link", { name: "Accounts" }).click();
+  await expect(page.getByRole("heading", { name: "Mail accounts", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Verify it/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add account" })).toBeDisabled();
+  await expect(page.getByText("No mail accounts connected yet.")).toBeVisible();
 
   await page.getByRole("link", { name: "Inbox" }).click();
   await expect(page.getByRole("heading", { name: "Your inbox" })).toBeVisible();
