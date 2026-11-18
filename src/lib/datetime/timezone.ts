@@ -9,6 +9,8 @@
  * with an explicit, documented policy.
  */
 
+import { formatDateTime } from "./format";
+
 const DTF_CACHE = new Map<string, Intl.DateTimeFormat>();
 
 function formatterFor(timeZone: string): Intl.DateTimeFormat {
@@ -149,17 +151,9 @@ export function zonedTimeToUtc(
   return new Date(candidates[candidates.length - 1] ?? target);
 }
 
-/** Formats an instant in a zone using a stable, locale-independent pattern. */
+/** Formats an instant in a zone with the shared, seconds-free formatter. */
 export function formatInZone(instant: Date, timeZone: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone,
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(instant);
+  return formatDateTime(instant, { timeZone, locale: "en-GB" });
 }
 
 /** The calendar date (YYYY-MM-DD) for an instant in a zone. */
@@ -187,16 +181,6 @@ export function addDays(instant: Date, days: number, timeZone: string): Date {
     },
     timeZone,
   );
-}
-
-/** 12-hour clock label for a UTC instant in a zone, e.g. "9:05 PM". */
-export function formatTime12(instant: Date, timeZone: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  }).format(instant);
 }
 
 export interface DateTimeValue {
