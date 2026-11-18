@@ -92,6 +92,7 @@ export function Popover({
       {open ? (
         <div
           role="dialog"
+          aria-label={triggerLabel ?? (typeof trigger === "string" ? trigger : "Panel")}
           className={cn(
             "absolute z-[var(--z-popover)] min-w-56 rounded-lg border border-border bg-surface p-1.5 text-foreground shadow-lg",
             "open:animate-[dialog-in_var(--motion-fast)_var(--ease-out)]",

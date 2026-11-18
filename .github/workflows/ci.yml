@@ -183,6 +183,47 @@ jobs:
             playwright-report/
           retention-days: 7
 
+  visual:
+    name: Storybook and visual regression
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Enable pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 12.21.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Build Storybook
+        run: pnpm build-storybook
+
+      - name: Run visual and axe tests
+        run: pnpm test:visual
+
+      - name: Upload diffs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: visual-regression
+          path: |
+            test-results/
+            playwright-report-visual/
+            tests/visual/storybook.spec.ts-snapshots/
+          retention-days: 7
+
   secret-scan:
     name: Secret scan
     runs-on: ubuntu-24.04

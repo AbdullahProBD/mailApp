@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 import { Icon } from "@/components/icons/icon";
 import { buildMonthGrid, isDateKey, parseDateKey } from "@/lib/datetime/calendar";
-import { formatMonthYear } from "@/lib/datetime/format";
+import { formatDate, formatMonthYear } from "@/lib/datetime/format";
 import { cn } from "@/lib/utils/cn";
 
 const WEEKDAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"] as const;
@@ -91,12 +91,18 @@ export function Calendar({ value, onChange, min, max, className }: CalendarProps
           const day = Number(key.slice(8));
           const selected = key === value;
           const disabled = isDisabled(key);
+          const parts = parseDateKey(key);
+          // The accessible name has to contain the visible day number as a
+          // word; a raw ISO key ("2026-03-01") hides it behind "01".
+          const label = parts
+            ? formatDate(Date.UTC(parts.year, parts.month, parts.day), { timeZone: "UTC" })
+            : key;
           return (
             <button
               key={key}
               type="button"
               disabled={disabled}
-              aria-label={key}
+              aria-label={label}
               aria-pressed={selected}
               onClick={() => {
                 onChange(key);

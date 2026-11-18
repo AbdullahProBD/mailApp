@@ -49,6 +49,13 @@ export function Select({
   const typeahead = useRef({ buffer: "", timer: 0 });
 
   const selected = options.find((option) => option.value === value) ?? null;
+  const visibleValue = selected
+    ? typeof selected.label === "string"
+      ? selected.label
+      : (selected.searchText ?? selected.value)
+    : placeholder;
+  // WCAG 2.5.3: the accessible name must contain the visible label text.
+  const accessibleName = `${label}: ${visibleValue}`;
 
   useEffect(() => {
     if (!open) return;
@@ -145,7 +152,7 @@ export function Select({
         ref={buttonRef}
         id={id}
         type="button"
-        aria-label={label}
+        aria-label={accessibleName}
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled}

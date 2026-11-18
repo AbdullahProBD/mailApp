@@ -70,8 +70,8 @@ export function CommandPalette({
       ref={dialogRef}
       aria-label="Command palette"
       className={cn(
-        "w-[min(32rem,calc(100vw-2rem))] rounded-xl border border-border bg-surface p-0 text-foreground shadow-xl",
-        "mt-[12vh] backdrop:bg-[oklch(0.2_0.01_260_/_0.5)] backdrop:backdrop-blur-sm",
+        "mx-auto mt-[12vh] mb-auto w-[min(32rem,calc(100vw-2rem))] rounded-xl border border-border bg-surface p-0 text-foreground shadow-xl",
+        "backdrop:bg-[oklch(0.2_0.01_260_/_0.5)] backdrop:backdrop-blur-sm",
         "open:animate-[dialog-in_var(--motion-base)_var(--ease-out)]",
       )}
       onCancel={(event) => {

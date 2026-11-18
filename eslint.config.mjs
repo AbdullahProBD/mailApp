@@ -92,6 +92,7 @@ export default defineConfig([
     "out/**",
     "build/**",
     "coverage/**",
+    "storybook-static/**",
     "next-env.d.ts",
     "node_modules/**",
   ]),

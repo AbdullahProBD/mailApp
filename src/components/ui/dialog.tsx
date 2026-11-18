@@ -50,7 +50,10 @@ export function Dialog({
       ref={ref}
       aria-labelledby={titleId}
       className={cn(
-        "w-[min(32rem,calc(100vw-2rem))] rounded-xl border border-border bg-surface p-0 text-foreground shadow-xl",
+        // Tailwind's preflight resets every margin, including the UA's
+        // `margin: auto` on <dialog>; without m-auto the modal pins to the
+        // top-left corner instead of centring in the viewport.
+        "m-auto w-[min(32rem,calc(100vw-2rem))] rounded-xl border border-border bg-surface p-0 text-foreground shadow-xl",
         "backdrop:bg-[oklch(0.2_0.01_260_/_0.5)] backdrop:backdrop-blur-sm",
         "open:animate-[dialog-in_var(--motion-base)_var(--ease-out)]",
         className,
