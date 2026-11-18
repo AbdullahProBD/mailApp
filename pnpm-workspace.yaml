@@ -3,6 +3,16 @@ allowBuilds:
   unrs-resolver: false
   esbuild: true
 
+# Temporary, documented audit exception.
+# GHSA-fc5q-39xc-vjpf (picomatch ReDoS) affects only build-time glob tooling
+# (eslint-config-next, lint-staged, typescript-eslint); picomatch is not in the
+# runtime bundle and glob patterns are repository-controlled. No patched
+# release exists yet (all published versions are <= 4.0.7). Remove this entry
+# as soon as picomatch publishes a fix; Dependabot tracks the advisory.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-fc5q-39xc-vjpf
+
 minimumReleaseAgeExclude:
   - nodemailer@10.6.0
 
