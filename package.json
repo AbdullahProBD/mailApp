@@ -42,7 +42,7 @@
     "@tiptap/starter-kit": "3.34.0",
     "@upstash/redis": "1.37.0",
     "@zxcvbn-ts/core": "4.3.0",
-    "@zxcvbn-ts/language-common": "4.1.2",
+    "@zxcvbn-ts/language-common": "4.2.0",
     "@zxcvbn-ts/language-en": "4.1.2",
     "drizzle-orm": "0.45.4",
     "imapflow": "2.12.1",
