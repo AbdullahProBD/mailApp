@@ -32,7 +32,7 @@
     "prepare": "husky"
   },
   "dependencies": {
-    "@aws-sdk/client-sesv2": "3.1169.0",
+    "@aws-sdk/client-sesv2": "3.1173.0",
     "@node-rs/argon2": "2.2.2",
     "@tiptap/extension-placeholder": "3.34.0",
     "@tiptap/extension-task-item": "3.34.0",
