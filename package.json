@@ -40,7 +40,7 @@
     "@tiptap/pm": "3.34.0",
     "@tiptap/react": "3.34.0",
     "@tiptap/starter-kit": "3.34.0",
-    "@upstash/redis": "1.37.0",
+    "@upstash/redis": "1.41.0",
     "@zxcvbn-ts/core": "4.3.0",
     "@zxcvbn-ts/language-common": "4.1.2",
     "@zxcvbn-ts/language-en": "4.1.2",
